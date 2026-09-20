@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bruit space</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/main.css" />
+  </head>
+  <body>
+    <h1>bruit space</h1>
+    <div id="unlock"></div>
+    <div id="app" class="app" hidden>
+      <header class="toolbar">
+        <label class="file-button">
+          Load folder
+          <input type="file" id="folder-input" webkitdirectory multiple hidden />
+        </label>
+        <label class="inline-field">
+          Max objects
+          <input type="number" id="max-objects" min="1" max="64" value="15" />
+        </label>
+        <button id="reshuffle" disabled>Reshuffle</button>
+        <span id="status" class="status">Load a folder of samples to begin.</span>
+        <div class="record-widget">
+          <span id="record-elapsed" class="record-elapsed" hidden></span>
+          <a id="download-link" class="download-link" hidden download></a>
+          <button id="record-toggle" class="record-toggle">● Record</button>
+        </div>
+      </header>
+      <div class="layout">
+        <aside class="side">
+          <section class="panel">
+            <h2>Room</h2>
+            <div id="room-controls"></div>
+          </section>
+          <section class="panel">
+            <h2>Reverb</h2>
+            <div id="reverb-controls"></div>
+          </section>
+          <section class="panel">
+            <h2>Output</h2>
+            <div id="output-controls"></div>
+          </section>
+          <section class="panel">
+            <h2>Objects</h2>
+            <ul id="object-list" class="object-list"></ul>
+          </section>
+        </aside>
+        <main class="stage">
+          <canvas id="room-canvas" class="room-canvas"></canvas>
+        </main>
+      </div>
+      <footer class="info-bar">
+        <span id="listener-readout"></span>
+        <span id="selected-readout"></span>
+        <span class="keys"
+          >W/A/S/D walk · Q/E turn · drag ▲ to move, drag the dot to
+          turn</span
+        >
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

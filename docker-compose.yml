@@ -1,0 +1,50 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: bruit-space/Dockerfile
+      target: dev
+    ports:
+      # Host port 5178 -- the next free frontend port in the root
+      # CLAUDE.md's port ledger (5173 bruit-kit, 5174 granular_midi, 5175
+      # grid-sequencer, 5176 relpmas, 5177 radio-tuner).
+      - "5178:5173"
+    volumes:
+      - .:/workspace/bruit-space
+      # Named (not anonymous) so the container's own node_modules (installed
+      # for Linux, and holding the file: symlink to bruit-kit) isn't
+      # shadowed by the host bind mount above, and rebuilds reuse this
+      # volume instead of orphaning a new one.
+      - app_node_modules:/workspace/bruit-space/node_modules
+      # Sibling package (package.json depends on it via
+      # "file:../bruit-kit", relative to /workspace/bruit-space) --
+      # read-only since this container only consumes it, never builds it.
+      # bruit-kit owns its own Docker setup; `make up` here shells into it
+      # first so dist/ is fresh before this container starts.
+      - ../bruit-kit:/workspace/bruit-kit:ro
+
+  # Manual verification only (not CI) -- drives the running app with a real
+  # (headless) browser. Run with `make verify`.
+  verify:
+    image: mcr.microsoft.com/playwright:v1.61.1-noble
+    profiles:
+      - tools
+    working_dir: /work
+    volumes:
+      - ./tests:/work
+      - verify_node_modules:/work/node_modules
+    # Shares the app container's network namespace (rather than reaching it
+    # by Compose service name) so BASE_URL can be http://localhost:5173.
+    network_mode: "service:app"
+    environment:
+      - BASE_URL=http://localhost:5173
+    depends_on:
+      - app
+    command: sh -c "npm install >/dev/null 2>&1 && npm run verify"
+
+# Named node_modules volumes (see comment on app's mount above): reused
+# across container recreates instead of Compose orphaning a fresh anonymous
+# volume every time, which is what was silently filling up disk space.
+volumes:
+  app_node_modules:
+  verify_node_modules:

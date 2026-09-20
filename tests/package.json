@@ -1,0 +1,12 @@
+{
+  "name": "bruit-space-tests",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}

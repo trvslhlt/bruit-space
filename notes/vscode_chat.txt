@@ -1,0 +1,118 @@
+- Me:
+help me develop an idea for a new app in the bruit kit family.
+
+don't build it yet. let's try to clarify as much of the functionality and UI as we can before building (creating visual artifacts to facilitate conversation is okay)
+
+I will provide info but I want you to assume the role of the product manager and collect what information you need from me. I will be the only user.
+
+idea:
+a virtual 2-d space where i can move a listener around. in that space there will be sound objects. as i get closer to the objects they get louder, further away softer. i should be able to set the size of the room and configure its reverb properties. the listener will also have an orientation so sounds to the left right front and back should be experienced differently
+
+sound objects:
+i would like to be able to provide a directory of sample files and have you place them around the room. we will want variety in how the samples are played back, but to begin with they can just loop
+
+
+- Chat:
+Let’s treat this as a product-discovery pass. I’ll make provisional assumptions, identify decisions, and use your answers to shape a focused first version before we build anything.
+
+My current understanding:
+
+A personal spatial sound playground. You provide a folder of audio samples; the app turns them into looping sound sources arranged in a 2D room. You navigate an oriented listener through that room, hearing volume and stereo position change based on distance and direction. The room has configurable dimensions and reverb.
+
+First decisions
+
+1. What is the primary use case?
+Composing or arranging soundscapes
+Relaxation or ambient listening
+Exploring spatial audio
+Sound design experimentation
+Something else?
+
+2. What should happen when a sample directory is imported?
+Automatically place every file randomly
+Arrange files in a grid
+Place them along the room perimeter
+Show unplaced samples and let you position them
+Offer several layout strategies
+
+3. Should placements persist?
+Save and reopen projects
+Remember only the most recent room
+Start fresh each time
+Export/import a project file
+
+4. What audio formats matter initially?
+For example: WAV, AIFF, MP3, FLAC, M4A. Are your sample directories likely to contain mixed formats?
+
+5. Where should this run?
+Browser app
+macOS desktop app
+Either is acceptable
+Must work offline
+
+6. How should you move the listener?
+Keyboard controls
+Mouse/touch drag
+Click-to-move
+Gamepad
+A visible listener you drag directly
+Several of these
+
+7. How should you place and edit sound objects?
+Drag objects around the room
+Numeric X/Y controls
+Snap-to-grid
+Resize each object’s audible range
+Per-object volume, loop toggle, mute, and playback controls
+
+8. How important is true spatialization?
+There are two possible starting points:
+    Simple: distance-based volume plus stereo panning
+    More immersive: binaural/HRTF spatial audio, where front/back and orientation are perceptually distinct
+Do you want front/back to be genuinely distinguishable through headphones, or is left/right panning enough for the first version?
+
+9. How should orientation work?
+Rotate the listener manually
+Face the direction of movement
+Lock orientation to the screen
+Show a cone/field of hearing
+Support keyboard rotation separately from movement
+
+10. What should the room look like?
+Minimal technical map
+Dark atmospheric soundscape
+Bright visual instrument
+Mostly empty canvas with subtle markers
+Something already established by the bruit kit family
+
+
+Provisional UI
++--------------------------------------------------------------+
+| bruit space     Project       Audio        Room        Play   |
++----------------------+---------------------------------------+
+|                      |                                       |
+|   room controls      |             2-D ROOM                  |
+|   width              |                                       |
+|   height             |       o       sound object            |
+|   reverb type        |                 .                     |
+|   wet/dry            |             △ listener                |
+|   decay              |                         o             |
+|                      |                                       |
+|   sound objects      |                                       |
+|   imported samples   |                                       |
+|   [search/filter]    |                                       |
++----------------------+---------------------------------------+
+| selected object: sample.wav | volume | range | mute | loop   |
++--------------------------------------------------------------+
+
+Me:
+1. the immediate purpose will be to create a recording that is loosely representative of going into an attic and rummaging through what's stored there. no faux-rummaging sounds, just the idea of exploring and taking a cursory look. any of the spacial sound design components developed along the way are a bonus
+2. automatically randomly place the objects, but allow me to make adjustments
+3. we can start fresh, no persistence. But i will need to be able to record and download sessions (as .wav, not webm)
+4. i have aif now. wav and mp3 are likely as well
+5. browser app. there are components that are likely to be useful in bruit-kit (node.js). and this project will hopefully add more functionality to that library
+6. mouse click and drag seems good but open to other ideas. will need to be able to control the position and orientation of the listener
+7. drag objects around the room
+8. simple is a a fine start, but immersive will make the experience much more interesting i imagine
+9. keyboaard controls for position and rotation could be good so that both can be managed independently at the same time
+10. simple visuals are fine. the sound is what matters

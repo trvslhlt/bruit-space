@@ -1,0 +1,24 @@
+{
+  "name": "bruit-space",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "predev": "mkdir -p public/worklets && cp node_modules/bruit-kit/dist/audio/pcm-recorder-processor.js public/worklets/",
+    "prebuild": "mkdir -p public/worklets && cp node_modules/bruit-kit/dist/audio/pcm-recorder-processor.js public/worklets/",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "bruit-kit": "file:../bruit-kit"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  }
+}
