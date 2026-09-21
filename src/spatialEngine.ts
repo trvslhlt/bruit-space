@@ -21,9 +21,17 @@ const REVERB_SEND_ROLLOFF_EXPONENT = 1;
 const SMOOTHING_SECONDS = 0.03;
 
 export const DEFAULT_MASTER_LEVEL = 0.4;
+export const DEFAULT_CLOSED_CUTOFF_HZ = 800;
+export const DEFAULT_TRANSITION_MS = 400;
+
+// Retargeting an already-closed object's cutoff while its slider is being
+// dragged: quick enough to track the slider, slow enough not to zipper.
+const CUTOFF_RETARGET_SECONDS = 0.05;
 
 interface Voice {
   source: AudioBufferSourceNode;
+  filter: BiquadFilterNode;
+  closed: boolean;
   gain: GainNode;
   send: GainNode;
   panner: PannerNode;
@@ -35,6 +43,8 @@ export class SpatialEngine {
   private master: GainNode;
   private reverb: ReverbEffect;
   private reverbReturn: GainNode;
+  private closedCutoffHz = DEFAULT_CLOSED_CUTOFF_HZ;
+  private transitionSeconds = DEFAULT_TRANSITION_MS / 1000;
 
   static async create(audioContext: AudioContext): Promise<SpatialEngine> {
     await preloadPcmRecorderWorklet(
@@ -72,6 +82,56 @@ export class SpatialEngine {
     this.reverb.setParams(params);
   }
 
+  /** Nyquist: Chromium treats a lowpass at exactly this frequency as an
+   * identity filter, so an open object is genuinely unfiltered rather than
+   * just very bright. */
+  private get openFrequency(): number {
+    return this.audioContext.sampleRate / 2;
+  }
+
+  setClosedCutoff(hz: number): void {
+    this.closedCutoffHz = hz;
+    for (const voice of this.voices.values()) {
+      if (voice.closed) this.rampFilter(voice, hz, CUTOFF_RETARGET_SECONDS);
+    }
+  }
+
+  setTransitionMs(ms: number): void {
+    this.transitionSeconds = ms / 1000;
+  }
+
+  /** Sweeps the object's lowpass between fully open and the closed cutoff
+   * over the configured transition time. */
+  setObjectClosed(id: number, closed: boolean): void {
+    const voice = this.voices.get(id);
+    if (!voice) return;
+    voice.closed = closed;
+    this.rampFilter(
+      voice,
+      closed ? this.closedCutoffHz : this.openFrequency,
+      this.transitionSeconds,
+    );
+  }
+
+  private rampFilter(voice: Voice, targetHz: number, seconds: number): void {
+    const param = voice.filter.frequency;
+    const now = this.audioContext.currentTime;
+    // Hold, then re-anchor, so the ramp starts from wherever the filter is
+    // right now -- including partway through an earlier sweep when the
+    // object is toggled again mid-transition. The explicit setValueAtTime
+    // matters: a ramp interpolates from the *previous scheduled event*, and
+    // after a finished sweep that event is long past, so without an anchor
+    // at `now` the ramp would already be almost complete the instant it
+    // begins (an audible snap instead of a sweep).
+    const current = param.value;
+    param.cancelAndHoldAtTime(now);
+    param.setValueAtTime(current, now);
+    param.exponentialRampToValueAtTime(
+      targetHz,
+      now + Math.max(seconds, 0.005),
+    );
+  }
+
   setMasterLevel(level: number): void {
     this.master.gain.setTargetAtTime(
       level,
@@ -84,10 +144,22 @@ export class SpatialEngine {
     this.reverbReturn.gain.value = level;
   }
 
-  addObject(id: number, buffer: AudioBuffer): void {
+  addObject(id: number, buffer: AudioBuffer, closed: boolean): void {
     const source = this.audioContext.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
+
+    // Before both the dry path and the reverb send, so a closed object's
+    // reverb is muffled too. Q of -3.01 dB is Butterworth (no resonant
+    // bump at the cutoff); BiquadFilterNode's default Q would add a peak
+    // that reads as a whistle when the cutoff sweeps.
+    const filter = new BiquadFilterNode(this.audioContext, {
+      type: "lowpass",
+      // Created already at its resting frequency, not swept there: a new
+      // object shouldn't audibly ramp in from open when it's placed.
+      frequency: closed ? this.closedCutoffHz : this.openFrequency,
+      Q: -3.0103,
+    });
 
     const gain = this.audioContext.createGain();
     gain.gain.value = 0;
@@ -107,18 +179,20 @@ export class SpatialEngine {
       rolloffFactor: 0,
     });
 
-    source.connect(gain).connect(panner).connect(this.master);
-    source.connect(send).connect(this.reverb.input);
+    source.connect(filter);
+    filter.connect(gain).connect(panner).connect(this.master);
+    filter.connect(send).connect(this.reverb.input);
 
     // Random start so loops of similar length don't begin phase-aligned.
     source.start(0, Math.random() * buffer.duration);
-    this.voices.set(id, { source, gain, send, panner });
+    this.voices.set(id, { source, filter, closed, gain, send, panner });
   }
 
   clearObjects(): void {
     for (const voice of this.voices.values()) {
       voice.source.stop();
       voice.source.disconnect();
+      voice.filter.disconnect();
       voice.gain.disconnect();
       voice.send.disconnect();
       voice.panner.disconnect();

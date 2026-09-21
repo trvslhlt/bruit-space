@@ -31,7 +31,8 @@ components are a bonus, and should land in `bruit-kit`.
 | Distance | One attenuation curve shared by all objects, reaching silence at a max distance. Per-object gain sets how loud each object is, so louder objects are audible from farther away |
 | Reverb | One global reverb, listener-independent. Room size maps to decay/pre-delay/damping, not geometry. Per-object send has a gentler rolloff than the dry signal, so distant sources get relatively more reverb |
 | Recording | Lossless PCM capture of the master output, written directly to `.wav`. Not `MediaRecorder` (see below) |
-| Visuals | Minimal technical map. The sound is what matters |
+| Object state | Each object is open (the plain sound) or closed (muffled), and every object starts closed. Click it on the map to toggle; a drag moves it without toggling. Closed = a lowpass whose cutoff (default 800 Hz) and sweep time (default 400 ms) are global settings. The sweep is exponential in frequency, from Nyquist (an identity filter, so open is truly unfiltered) down to the cutoff, and can be reversed mid-sweep. The filter sits before both the dry path and the reverb send, so a closed object's reverb is muffled too |
+| Visuals | Minimal technical map. The sound is what matters. Closed objects draw as hollow rings |
 
 Non-goals: wall/occlusion modelling, listener-position-dependent reverb,
 footsteps or walking sounds, persistence, per-object range, non-loop playback
@@ -70,9 +71,9 @@ farther in metres. The curve's cutoff is expressed in room units, not pixels.
 ## Audio graph
 
 ```
-sample (loop, random offset) ─► objectGain ─► PannerNode(HRTF) ─┐
-                                   │                             ├─► master ─► speakers
-                                   └─► sendGain ─► shared Reverb ┘        └─► PCM recorder ─► .wav
+sample (loop, random offset) ─► lowpass (open/closed) ─┬─► objectGain ─► PannerNode(HRTF) ─┐
+                                                        │                                    ├─► master ─► speakers
+                                                        └─► sendGain ─► shared Reverb ───────┘        └─► PCM recorder ─► .wav
 ```
 
 - The panner does direction only. `distanceModel` is neutralised (large
@@ -132,7 +133,13 @@ claimed in the root `CLAUDE.md` ledger.
 
 `make verify` (Playwright, headless Chromium) on the golden path: load a
 synthesized folder of test samples, confirm the cap applies, confirm objects and
-listener render, confirm keyboard movement changes listener position, confirm a
+listener render, confirm keyboard movement changes listener position, confirm every object starts
+closed, confirm clicking an object toggles it while dragging doesn't, confirm a
+closed tone records at <0.2x the level of the same tone opened, confirm the
+closing sweep by sampling the filter's own frequency while it moves (continuous,
+monotonic, ~the configured transition time; a step-size check catches a ramp
+that snaps -- verified by deliberately removing the ramp's anchor, which drops
+one step to 0.05x versus 0.93x normally), confirm a
 short recording downloads a valid PCM `.wav` (RIFF header, non-silent). Audio
 *quality* — whether front/back actually reads through headphones — can't be
 verified by script and needs a manual listen.
@@ -142,6 +149,8 @@ verified by script and needs a manual listen.
 - Loop-only (so no per-object loop toggle); other playback styles (one-shots, retriggering, granular
   via `bruit-kit` sources) come later.
 - Rate drift on loops: optional, decide by ear.
+- Closed cutoff/transition are global; per-object values would let a
+  "trunk" muffle harder than a "box". Not built.
 - Master headroom (0.6, then the shared limiter) is a first guess. Full-scale
   drone samples summed from many nearby objects can push the limiter; tune by
   ear.

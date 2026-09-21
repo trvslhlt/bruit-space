@@ -4,6 +4,9 @@
 // applies and every file -- AIFF included -- decodes, walk the listener
 // with WASD/Q/E, drag the listener body and its heading handle on the
 // canvas, shrink the room and confirm the listener stays inside it, and
+// click an object to toggle it open/closed (a drag must not toggle), and
+// confirm closing a bright tone really muffles it -- gradually, over the
+// transition time, not as an instant snap -- and
 // record a short clip that must download as a valid, non-silent stereo
 // 16-bit PCM WAV -- asserting zero console/page errors throughout. Run
 // after touching anything under src/ (requires `make up` first):
@@ -106,6 +109,19 @@ writeFileSync(path.join(sampleDir, "notes.txt"), "not audio either");
 
 const browser = await chromium.launch();
 const page = await browser.newPage();
+// Records every BiquadFilterNode the app constructs with `new` (one per
+// sound object; bruit-kit's own effects use createBiquadFilter() and aren't
+// caught), so the open/closed sweep can be read straight off the filter.
+await page.addInitScript(() => {
+  const Original = window.BiquadFilterNode;
+  window.__filters = [];
+  window.BiquadFilterNode = class extends Original {
+    constructor(...args) {
+      super(...args);
+      window.__filters.push(this);
+    }
+  };
+});
 page.on("console", (msg) => {
   if (msg.type() === "error") errors.push(msg.text());
 });
@@ -188,6 +204,82 @@ if ((await page.locator("#object-list li").count()) === 5) {
 await page.click("#reshuffle");
 await waitForStatus(/^5 of 21 files placed/);
 ok("reshuffle re-places the same count");
+
+const canvasObjects = async () =>
+  JSON.parse(await page.getAttribute("#room-canvas", "data-objects"));
+const rowButton = (id) =>
+  page.locator(`.object-row[data-id="${id}"] .state-toggle`);
+async function isolatedObject() {
+  const list = await canvasObjects();
+  const listener = await canvasPoint("listener-px");
+  const box = await page.locator("#room-canvas").boundingBox();
+  const others = (o) => [
+    ...list.filter((p) => p.id !== o.id),
+    { x: listener.x - box.x, y: listener.y - box.y },
+  ];
+  const clearance = (o) =>
+    Math.min(...others(o).map((p) => Math.hypot(p.x - o.x, p.y - o.y)));
+  return list.reduce((best, o) => (clearance(o) > clearance(best) ? o : best));
+}
+
+const initialObjects = await canvasObjects();
+if (
+  initialObjects.length > 0 &&
+  initialObjects.every((o) => o.closed) &&
+  (await page.locator(".state-toggle.is-closed").count()) ===
+    initialObjects.length
+) {
+  ok("every object starts closed");
+} else {
+  fail("new objects should all start closed");
+}
+
+const target = await isolatedObject();
+const canvasBox = await page.locator("#room-canvas").boundingBox();
+const targetAt = { x: canvasBox.x + target.x, y: canvasBox.y + target.y };
+await page.mouse.click(targetAt.x, targetAt.y);
+await page.waitForTimeout(100);
+if (
+  (await rowButton(target.id).textContent()) === "open" &&
+  !(await canvasObjects()).find((o) => o.id === target.id).closed
+) {
+  ok("clicking an object on the map opens it");
+} else {
+  fail("click on a closed object should open it");
+}
+await page.mouse.click(targetAt.x, targetAt.y);
+await page.waitForTimeout(100);
+if ((await rowButton(target.id).textContent()) === "closed") {
+  ok("clicking it again closes it");
+} else {
+  fail("second click should close the object again");
+}
+
+// Drag toward the middle of the map: an object placed near an edge would be
+// clamped by the room boundary and move less than the pointer did.
+const dragDy = target.y < canvasBox.height / 2 ? 40 : -40;
+await page.mouse.move(targetAt.x, targetAt.y);
+await page.mouse.down();
+await page.mouse.move(targetAt.x, targetAt.y + dragDy, { steps: 5 });
+await page.mouse.up();
+await page.waitForTimeout(100);
+const afterDrag = (await canvasObjects()).find((o) => o.id === target.id);
+if (!afterDrag.closed) fail("dragging an object must not toggle it");
+else if (Math.abs(afterDrag.y - (target.y + dragDy)) < 3) {
+  ok("dragging an object moves it without toggling it");
+} else {
+  fail(
+    `drag should move the object ${dragDy} px, got ${afterDrag.y - target.y}`,
+  );
+}
+
+await rowButton(target.id).click();
+if ((await rowButton(target.id).textContent()) === "open") {
+  ok("the Objects list button toggles too");
+} else {
+  fail("list button should open the object");
+}
+await rowButton(target.id).click();
 
 const start = await readListener();
 await hold("d", 600);
@@ -283,6 +375,141 @@ if (wav.peak < 32767) ok("recording doesn't clip at the default master level");
 else fail("recording hit full scale -- default master level is too hot");
 if (wav.filename.endsWith(".wav")) ok("download is named .wav");
 else fail(`unexpected download name ${wav.filename}`);
+
+// --- Closing muffles the sound, gradually. One 3 kHz tone, well above the
+// default 800 Hz cutoff, so closing should take nearly all of it away. (Not
+// higher: near 8 kHz the HRTF's own level swings by ~10x with the object's
+// random direction, which makes absolute levels unreliable.)
+const toneDir = path.join(os.tmpdir(), "bruit-space-verify-tone");
+rmSync(toneDir, { recursive: true, force: true });
+mkdirSync(toneDir, { recursive: true });
+writeFileSync(path.join(toneDir, "bright.wav"), wavFile(sineSamples(3000)));
+await page.setInputFiles("#folder-input", toneDir);
+await waitForStatus(/^1 of 1 files placed/);
+await setSlider("hearing-range", 40);
+const toneId = (await canvasObjects())[0].id;
+await page
+  .locator(`.object-row[data-id="${toneId}"] input[type="range"]`)
+  .evaluate((el) => {
+    el.value = "1";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+// The previous scene's reverb tail (2 s decay) is still ringing after the
+// swap; measuring straight away would mostly measure that.
+await page.waitForTimeout(2500);
+
+async function recordWindows({ totalMs }) {
+  await page.click("#record-toggle");
+  await page.waitForTimeout(totalMs);
+  await page.click("#record-toggle");
+  await page.waitForSelector("#download-link:not([hidden])", {
+    timeout: 10000,
+  });
+  // RMS per 100 ms window.
+  return page.evaluate(async () => {
+    const href = document.querySelector("#download-link").href;
+    const buffer = await (await fetch(href)).arrayBuffer();
+    const view = new DataView(buffer);
+    const rate = view.getUint32(24, true);
+    const frames = (buffer.byteLength - 44) / 4;
+    const windowFrames = Math.floor(rate * 0.1);
+    const rms = [];
+    for (let start = 0; start + windowFrames <= frames; start += windowFrames) {
+      let sum = 0;
+      for (let i = start; i < start + windowFrames; i++) {
+        const sample = view.getInt16(44 + i * 4, true) / 32768;
+        sum += sample * sample;
+      }
+      rms.push(Math.sqrt(sum / windowFrames));
+    }
+    return rms;
+  });
+}
+const mean = (values) => values.reduce((a, b) => a + b, 0) / values.length;
+
+// Freshly placed, so this is the starting (closed) state, untouched.
+const closedWindows = await recordWindows({ totalMs: 1200 });
+const closedLevel = mean(closedWindows.slice(1));
+
+await rowButton(toneId).click();
+await page.waitForTimeout(1000);
+const openWindows = await recordWindows({ totalMs: 1200 });
+const openLevel = mean(openWindows.slice(1));
+if (openLevel > 0.005) {
+  ok(`opened bright tone is audible (rms ${openLevel.toFixed(3)})`);
+} else {
+  fail(`opened tone is silent (rms ${openLevel})`);
+}
+if (closedLevel < openLevel * 0.2) {
+  ok(
+    `a new object starts muffled (${(closedLevel / openLevel).toFixed(3)}x the open level)`,
+  );
+} else {
+  fail(`closed level ${closedLevel} isn't well below open level ${openLevel}`);
+}
+
+// The sweep itself is checked on the filter's own frequency, sampled while
+// it moves -- far less timing-sensitive than inferring it from recorded
+// level windows, and it still catches a ramp that snaps instead of sweeping.
+await setSlider("closed-transition", 1500);
+// Long idle after the opening sweep finishes: a ramp that isn't anchored
+// at "now" interpolates from that finished sweep's end, so the longer the
+// idle, the more of the closing sweep it would skip -- this is what makes
+// the check below sensitive to a missing anchor.
+await page.waitForTimeout(8000);
+const polling = page.evaluate(async (durationMs) => {
+  const filter = window.__filters.at(-1);
+  const samples = [];
+  const begin = performance.now();
+  while (performance.now() - begin < durationMs) {
+    samples.push([performance.now() - begin, filter.frequency.value]);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return {
+    samples,
+    q: filter.Q.value,
+    nyquist: filter.context.sampleRate / 2,
+  };
+}, 3000);
+await page.waitForTimeout(500);
+await rowButton(toneId).click();
+const { samples, q, nyquist } = await polling;
+
+const hz = samples.map(([, value]) => value);
+const closedHz = 800;
+const first = samples.find(([, value]) => value < nyquist * 0.98);
+const last = samples.find(([, value]) => value <= closedHz * 1.02);
+const midSweep = hz.filter((v) => v > closedHz * 1.05 && v < nyquist * 0.95);
+const monotonic = hz.every((v, i) => i === 0 || v <= hz[i - 1] * 1.001);
+const sweepMs = first && last ? last[0] - first[0] : Number.NaN;
+// Continuity, not just duration: a ramp that snaps (jumps most of the way,
+// then glides the rest) still spans a plausible first-to-last time. A real
+// 1.5 s sweep over ~5 octaves falls ~5% per 25 ms sample; allow slack for
+// scheduling jitter, but a snap is a drop of 90%+ in one step.
+const smallestStep = Math.min(...hz.slice(1).map((v, i) => v / hz[i]));
+if (
+  Math.abs(hz[0] - nyquist) < nyquist * 0.01 &&
+  Math.abs(hz.at(-1) - closedHz) < 25 &&
+  monotonic &&
+  smallestStep > 0.6 &&
+  midSweep.length >= 20 &&
+  sweepMs > 1100 &&
+  sweepMs < 1900
+) {
+  ok(
+    `closing sweeps the cutoff ${Math.round(hz[0])} -> ${Math.round(hz.at(-1))} Hz over ${Math.round(sweepMs)} ms (${midSweep.length} samples mid-sweep, monotonic, smallest step ${smallestStep.toFixed(2)}x)`,
+  );
+} else {
+  fail(
+    `bad closing sweep: start ${hz[0]}, end ${hz.at(-1)}, monotonic ${monotonic}, smallest step ${smallestStep.toFixed(2)}x, mid samples ${midSweep.length}, sweep ${sweepMs} ms`,
+  );
+}
+if (Math.abs(q - -3.0103) < 0.01) {
+  ok("the lowpass is Butterworth (no resonant peak)");
+} else {
+  fail(`unexpected filter Q ${q} dB`);
+}
+rmSync(toneDir, { recursive: true, force: true });
 
 if (errors.length > 0) fail(`console/page errors:\n  ${errors.join("\n  ")}`);
 else ok("no console or page errors");

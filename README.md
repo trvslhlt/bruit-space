@@ -44,6 +44,12 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
 - **Mouse:** drag the ▲ to move the listener, drag the dot in front of it
   to turn. Drag any sound object to move it. Each object has its own
   loudness slider and mute in the Objects list.
+- **Open / closed:** every object starts closed. Click one on the map (or
+  its open/closed button in the Objects list) to open it; click again to
+  close it. Closed muffles it with a lowpass, reverb included, swept
+  in/out over the transition time. Open is the plain, unfiltered sound. **Cutoff** and
+  **Transition** under "Closed objects" apply to every object. Dragging an
+  object moves it without toggling it.
 - **Hearing range** is the distance at which every object falls to
   silence (dashed ring on the map). One curve for all objects — a louder
   object is simply still audible from farther away.

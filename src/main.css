@@ -168,7 +168,7 @@ button:disabled {
 
 .object-row {
   display: grid;
-  grid-template-columns: 1fr 70px auto;
+  grid-template-columns: 1fr 60px 52px auto;
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0.4rem;
@@ -190,6 +190,16 @@ button:disabled {
 .object-row input[type="range"] {
   width: 100%;
   min-width: 0;
+}
+
+.state-toggle {
+  padding: 0.1rem 0;
+  font-size: 0.75rem;
+}
+
+.state-toggle.is-closed {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .info-bar {

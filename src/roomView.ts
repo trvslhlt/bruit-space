@@ -11,6 +11,8 @@ const LISTENER_RADIUS_PX = 12;
 const NOSE_DISTANCE_PX = 34;
 const NOSE_RADIUS_PX = 7;
 const LABEL_MAX_CHARS = 18;
+// Pointer travel below this still counts as a click rather than a drag.
+const CLICK_SLOP_PX = 4;
 
 type Drag =
   | { kind: "listener"; offsetX: number; offsetY: number }
@@ -21,6 +23,8 @@ export interface RoomViewCallbacks {
   /** Something in the room was moved by the pointer. */
   onMove(): void;
   onSelect(id: number | null): void;
+  /** An object was clicked (pressed and released without dragging). */
+  onToggle(id: number): void;
 }
 
 /** Top-down map of the room. Draws the state and turns pointer drags into
@@ -31,6 +35,8 @@ export class RoomView {
   private originX = 0;
   private originY = 0;
   private drag: Drag | null = null;
+  private pressStart = { x: 0, y: 0 };
+  private dragged = false;
   private cssWidth = 0;
   private cssHeight = 0;
 
@@ -42,7 +48,7 @@ export class RoomView {
     this.ctx = canvas.getContext("2d")!;
     canvas.addEventListener("pointerdown", this.onPointerDown);
     canvas.addEventListener("pointermove", this.onPointerMove);
-    canvas.addEventListener("pointerup", this.endDrag);
+    canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.endDrag);
     canvas.addEventListener("lostpointercapture", this.endDrag);
     new ResizeObserver(() => this.resize()).observe(canvas);
@@ -108,6 +114,8 @@ export class RoomView {
   private onPointerDown = (event: PointerEvent): void => {
     const pointer = this.pointerPosition(event);
     const roomPoint = this.toRoom(pointer.x, pointer.y);
+    this.pressStart = pointer;
+    this.dragged = false;
 
     // Nose first: it sits close to the listener body and must stay
     // grabbable even when the two are drawn near each other.
@@ -165,6 +173,19 @@ export class RoomView {
   private onPointerMove = (event: PointerEvent): void => {
     if (!this.drag) return;
     const pointer = this.pointerPosition(event);
+    // Nothing moves until the pointer has travelled past the click slop, so
+    // clicking an object to toggle it doesn't also nudge it.
+    if (!this.dragged) {
+      if (
+        Math.hypot(
+          pointer.x - this.pressStart.x,
+          pointer.y - this.pressStart.y,
+        ) <= CLICK_SLOP_PX
+      ) {
+        return;
+      }
+      this.dragged = true;
+    }
     const roomPoint = this.toRoom(pointer.x, pointer.y);
     const { listener } = this.room;
 
@@ -191,6 +212,13 @@ export class RoomView {
       }
     }
     this.callbacks.onMove();
+  };
+
+  private onPointerUp = (): void => {
+    if (this.drag?.kind === "object" && !this.dragged) {
+      this.callbacks.onToggle(this.drag.id);
+    }
+    this.endDrag();
   };
 
   private endDrag = (): void => {
@@ -256,10 +284,19 @@ export class RoomView {
       const audibility = object.muted
         ? 0
         : distanceGain(distanceToListener(room, object), room.hearingRange);
-      ctx.fillStyle = `rgba(76, 125, 255, ${0.2 + 0.8 * audibility})`;
       ctx.beginPath();
       ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
-      ctx.fill();
+      if (object.closed) {
+        // Hollow ring: closed reads as "shut", filled reads as "open".
+        ctx.fillStyle = `rgba(76, 125, 255, ${0.06 + 0.16 * audibility})`;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(76, 125, 255, ${0.35 + 0.65 * audibility})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = `rgba(76, 125, 255, ${0.2 + 0.8 * audibility})`;
+        ctx.fill();
+      }
       if (object.id === room.selectedId) {
         ctx.strokeStyle = "#e4e6eb";
         ctx.lineWidth = 2;
@@ -297,9 +334,19 @@ export class RoomView {
     ctx.fill();
     ctx.restore();
 
-    // Screen positions of the two draggable listener handles, so a
-    // Playwright check can grab them without re-deriving this file's
-    // layout math.
+    // Screen positions of everything clickable/draggable, so a Playwright
+    // check can grab them without re-deriving this file's layout math.
+    this.canvas.dataset.objects = JSON.stringify(
+      room.objects.map((object) => {
+        const at = this.toScreen(object.x, object.y);
+        return {
+          id: object.id,
+          x: Number(at.x.toFixed(1)),
+          y: Number(at.y.toFixed(1)),
+          closed: object.closed,
+        };
+      }),
+    );
     this.canvas.dataset.listenerPx = `${listenerAt.x.toFixed(1)},${listenerAt.y.toFixed(1)}`;
     this.canvas.dataset.nosePx = `${nose.x.toFixed(1)},${nose.y.toFixed(1)}`;
   }

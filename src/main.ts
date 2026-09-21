@@ -6,6 +6,7 @@ import {
   LISTENER_SPEED,
   LISTENER_TURN_RATE,
   type RoomState,
+  type SoundObject,
   clamp,
   clampToRoom,
   distanceToListener,
@@ -13,7 +14,12 @@ import {
 } from "./room";
 import { RoomView } from "./roomView";
 import { decodeFile, pickAudioFiles, shuffled } from "./sampleLoader";
-import { DEFAULT_MASTER_LEVEL, SpatialEngine } from "./spatialEngine";
+import {
+  DEFAULT_CLOSED_CUTOFF_HZ,
+  DEFAULT_MASTER_LEVEL,
+  DEFAULT_TRANSITION_MS,
+  SpatialEngine,
+} from "./spatialEngine";
 
 const MIN_SPAWN_DISTANCE_FROM_LISTENER = 1.5;
 
@@ -98,6 +104,30 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     { hardMin: 0, hardMax: 1 },
   );
 
+  query("#closed-controls").innerHTML =
+    rangeControl(
+      "closed-cutoff",
+      "Cutoff (Hz)",
+      100,
+      8000,
+      50,
+      DEFAULT_CLOSED_CUTOFF_HZ,
+    ) +
+    rangeControl(
+      "closed-transition",
+      "Transition (ms)",
+      50,
+      3000,
+      10,
+      DEFAULT_TRANSITION_MS,
+    );
+  bindSlider("closed-cutoff", (value) => {
+    engine.setClosedCutoff(value);
+  });
+  bindSlider("closed-transition", (value) => {
+    engine.setTransitionMs(value);
+  });
+
   query("#output-controls").innerHTML = rangeControl(
     "master-level",
     "Master",
@@ -119,6 +149,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       dirty = true;
     },
     onSelect: (id) => select(id),
+    onToggle: (id) => toggleClosed(id),
   });
 
   const objectListEl = query<HTMLUListElement>("#object-list");
@@ -130,6 +161,23 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     )) {
       row.classList.toggle("is-selected", Number(row.dataset.id) === id);
     }
+    dirty = true;
+  }
+
+  function applyStateButton(button: HTMLElement, object: SoundObject): void {
+    button.textContent = object.closed ? "closed" : "open";
+    button.classList.toggle("is-closed", object.closed);
+  }
+
+  function toggleClosed(id: number): void {
+    const object = room.objects.find((o) => o.id === id);
+    if (!object) return;
+    object.closed = !object.closed;
+    engine.setObjectClosed(object.id, object.closed);
+    const button = objectListEl.querySelector<HTMLElement>(
+      `.object-row[data-id="${id}"] .state-toggle`,
+    );
+    if (button) applyStateButton(button, object);
     dirty = true;
   }
 
@@ -157,6 +205,15 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
         dirty = true;
       });
 
+      const stateButton = document.createElement("button");
+      stateButton.className = "state-toggle";
+      stateButton.title = "Toggle open / closed";
+      applyStateButton(stateButton, object);
+      stateButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleClosed(object.id);
+      });
+
       const muteLabel = document.createElement("label");
       muteLabel.title = "Mute";
       const mute = document.createElement("input");
@@ -167,7 +224,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       });
       muteLabel.append(mute, " M");
 
-      row.append(name, gain, muteLabel);
+      row.append(name, gain, stateButton, muteLabel);
       row.addEventListener("click", () => select(object.id));
       objectListEl.appendChild(row);
     }
@@ -220,9 +277,10 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
         ...randomObjectPosition(room, MIN_SPAWN_DISTANCE_FROM_LISTENER),
         gain: 0.3 + Math.random() * 0.5,
         muted: false,
+        closed: true,
       };
       room.objects.push(object);
-      engine.addObject(object.id, buffer);
+      engine.addObject(object.id, buffer, object.closed);
     }
     renderObjectList();
     reshuffleButton.disabled = false;
@@ -296,7 +354,8 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     const heard = Math.round(
       distanceGain(distance, room.hearingRange) * selected.gain * 100,
     );
-    selectedReadout.textContent = `${selected.name} · ${distance.toFixed(1)} m away · heard at ${heard}%`;
+    const state = selected.closed ? "closed" : "open";
+    selectedReadout.textContent = `${selected.name} · ${state} · ${distance.toFixed(1)} m away · heard at ${heard}%`;
   }
 
   const keys = createKeyboardControls();

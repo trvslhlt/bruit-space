@@ -16,6 +16,9 @@ export interface SoundObject {
    * a louder one is simply still audible from farther away. */
   gain: number;
   muted: boolean;
+  /** Closed muffles the object with a lowpass; open is the unfiltered
+   * sound. See SpatialEngine.setObjectClosed. */
+  closed: boolean;
 }
 
 export interface RoomState {
