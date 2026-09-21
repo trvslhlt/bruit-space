@@ -115,6 +115,16 @@ const page = await browser.newPage();
 await page.addInitScript(() => {
   const Original = window.BiquadFilterNode;
   window.__filters = [];
+  // Every GainNode from createGain(), in creation order: a sound object's
+  // voice creates its direct-path gain then its reverb-send gain, so the
+  // last two are the most recently placed object's.
+  window.__gains = [];
+  const originalCreateGain = BaseAudioContext.prototype.createGain;
+  BaseAudioContext.prototype.createGain = function (...args) {
+    const gain = originalCreateGain.apply(this, args);
+    window.__gains.push(gain);
+    return gain;
+  };
   window.BiquadFilterNode = class extends Original {
     constructor(...args) {
       super(...args);
@@ -508,6 +518,44 @@ if (Math.abs(q - -3.0103) < 0.01) {
   ok("the lowpass is Butterworth (no resonant peak)");
 } else {
   fail(`unexpected filter Q ${q} dB`);
+}
+// --- The reverb share of an object's sound follows the near/far settings,
+// interpolated linearly with distance. Read straight off the voice's two
+// gains: direct = total * (1 - wet), send = total * wet, with total on the
+// shared (1 - d/range)^2 curve.
+await setSlider("hearing-range", 40);
+await page.click(`.object-row[data-id="${toneId}"] .object-name`);
+async function voiceMix() {
+  await page.waitForTimeout(400);
+  const readout = await page.textContent("#selected-readout");
+  const distance = Number(readout.match(/([\d.]+) m away/)[1]);
+  const [direct, send] = await page.evaluate(() => [
+    window.__gains.at(-2).gain.value,
+    window.__gains.at(-1).gain.value,
+  ]);
+  return { distance, direct, send };
+}
+for (const [near, far] of [
+  [0, 1],
+  [0.2, 0.8],
+  [0.5, 0.5],
+]) {
+  await setSlider("reverb-wet-near", near);
+  await setSlider("reverb-wet-far", far);
+  const { distance, direct, send } = await voiceMix();
+  const t = distance / 40;
+  const expectedWet = near + (far - near) * t;
+  const wet = send / (direct + send);
+  const totalRatio = (direct + send) / (1 - t) ** 2;
+  if (Math.abs(wet - expectedWet) < 0.03 && Math.abs(totalRatio - 1) < 0.03) {
+    ok(
+      `wet fraction ${wet.toFixed(2)} at ${distance} m with near ${near} / far ${far} (expected ${expectedWet.toFixed(2)})`,
+    );
+  } else {
+    fail(
+      `reverb mix off at ${distance} m, near ${near} / far ${far}: wet ${wet.toFixed(3)} (expected ${expectedWet.toFixed(3)}), total/expected ${totalRatio.toFixed(3)}`,
+    );
+  }
 }
 rmSync(toneDir, { recursive: true, force: true });
 

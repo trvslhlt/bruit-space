@@ -53,6 +53,20 @@ export function distanceToListener(
   return Math.hypot(object.x - room.listener.x, object.y - room.listener.y);
 }
 
+/** How much of an object's sound is reverb rather than direct signal, from
+ * 0 (all direct) to 1 (all reverb): `nearWet` when the listener is on top
+ * of the object, `farWet` at the edge of hearing range, interpolated
+ * linearly between (and held at `farWet` beyond it). */
+export function reverbWetFraction(
+  distance: number,
+  hearingRange: number,
+  nearWet: number,
+  farWet: number,
+): number {
+  const t = hearingRange > 0 ? clamp(distance / hearingRange, 0, 1) : 1;
+  return nearWet + (farWet - nearWet) * t;
+}
+
 /** A random spot at least `minDistanceFromListener` from the listener, so
  * nothing spawns right on top of them -- falls back to whatever the last
  * try was rather than looping forever in a room too small to satisfy it. */

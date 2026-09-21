@@ -6,14 +6,16 @@ import {
   preloadPcmRecorderWorklet,
 } from "bruit-kit/audio";
 import { connectToOutput, getSharedLimiter } from "./audioContext";
-import type { RoomState } from "./room";
+import { type RoomState, reverbWetFraction } from "./room";
 
-// The reverb send falls off more gently than the direct signal (exponent 1
-// vs 2 -- see spatialMath.ts), so as a source recedes its direct level
-// drops faster than its reverb does. That shifting direct-to-reverberant
-// ratio is the main cue for distance; no room geometry needed.
-const DIRECT_ROLLOFF_EXPONENT = 2;
-const REVERB_SEND_ROLLOFF_EXPONENT = 1;
+// One distance curve (silent at the hearing range) sets an object's total
+// level. How much of that total is reverb rather than direct sound is a
+// separate, user-set mix -- a wet fraction that shifts from "near" (on top
+// of the object) to "far" (at the edge of hearing range). That shifting
+// direct-to-reverberant ratio is the main cue for distance; no room
+// geometry needed. Direct and reverb fade out together, so nothing pops at
+// the range boundary.
+const ROLLOFF_EXPONENT = 2;
 
 // Applied to every position/gain change rather than assigning .value
 // directly, which would step and click as the listener or a dragged object
@@ -21,6 +23,8 @@ const REVERB_SEND_ROLLOFF_EXPONENT = 1;
 const SMOOTHING_SECONDS = 0.03;
 
 export const DEFAULT_MASTER_LEVEL = 0.9;
+export const DEFAULT_WET_NEAR = 0.2;
+export const DEFAULT_WET_FAR = 0.8;
 export const DEFAULT_CLOSED_CUTOFF_HZ = 200;
 export const DEFAULT_TRANSITION_MS = 700;
 
@@ -42,7 +46,8 @@ export class SpatialEngine {
   private voices = new Map<number, Voice>();
   private master: GainNode;
   private reverb: ReverbEffect;
-  private reverbReturn: GainNode;
+  private wetNear = DEFAULT_WET_NEAR;
+  private wetFar = DEFAULT_WET_FAR;
   private closedCutoffHz = DEFAULT_CLOSED_CUTOFF_HZ;
   private transitionSeconds = DEFAULT_TRANSITION_MS / 1000;
 
@@ -66,10 +71,7 @@ export class SpatialEngine {
     this.reverb = new ReverbEffect(audioContext);
     // Fully wet: this is a send bus, the dry signal never goes through it.
     this.reverb.setParams({ wet: 1 });
-    this.reverbReturn = audioContext.createGain();
-    this.reverbReturn.gain.value = 0.5;
-    this.reverb.output.connect(this.reverbReturn);
-    this.reverbReturn.connect(this.master);
+    this.reverb.output.connect(this.master);
 
     // Tapped after the limiter so the recording is exactly what's heard.
     this.recorder = new PcmRecorder(
@@ -140,8 +142,10 @@ export class SpatialEngine {
     );
   }
 
-  setReverbLevel(level: number): void {
-    this.reverbReturn.gain.value = level;
+  /** Takes effect on the next update(). */
+  setReverbMix(mix: { near?: number; far?: number }): void {
+    if (mix.near !== undefined) this.wetNear = mix.near;
+    if (mix.far !== undefined) this.wetFar = mix.far;
   }
 
   addObject(id: number, buffer: AudioBuffer, closed: boolean): void {
@@ -222,20 +226,16 @@ export class SpatialEngine {
       if (!voice) continue;
       const distance = Math.hypot(object.x - listener.x, object.y - listener.y);
       const level = object.muted ? 0 : object.gain;
-      smooth(
-        voice.gain.gain,
-        level *
-          distanceGain(distance, room.hearingRange, DIRECT_ROLLOFF_EXPONENT),
+      const total =
+        level * distanceGain(distance, room.hearingRange, ROLLOFF_EXPONENT);
+      const wet = reverbWetFraction(
+        distance,
+        room.hearingRange,
+        this.wetNear,
+        this.wetFar,
       );
-      smooth(
-        voice.send.gain,
-        level *
-          distanceGain(
-            distance,
-            room.hearingRange,
-            REVERB_SEND_ROLLOFF_EXPONENT,
-          ),
-      );
+      smooth(voice.gain.gain, total * (1 - wet));
+      smooth(voice.send.gain, total * wet);
       smooth(voice.panner.positionX, object.x);
       smooth(voice.panner.positionZ, object.y);
     }

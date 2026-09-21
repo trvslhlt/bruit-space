@@ -18,6 +18,8 @@ import {
   DEFAULT_CLOSED_CUTOFF_HZ,
   DEFAULT_MASTER_LEVEL,
   DEFAULT_TRANSITION_MS,
+  DEFAULT_WET_FAR,
+  DEFAULT_WET_NEAR,
   SpatialEngine,
 } from "./spatialEngine";
 
@@ -91,7 +93,22 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     rangeControl("reverb-decay", "Decay (s)", 0.2, 8, 0.1, 2) +
     rangeControl("reverb-predelay", "Pre-delay (ms)", 0, 100, 1, 20) +
     rangeControl("reverb-damping", "Damping (Hz)", 500, 12000, 100, 6000) +
-    rangeControl("reverb-level", "Level", 0, 1, 0.05, 0.5);
+    rangeControl(
+      "reverb-wet-near",
+      "Wet at object",
+      0,
+      1,
+      0.05,
+      DEFAULT_WET_NEAR,
+    ) +
+    rangeControl(
+      "reverb-wet-far",
+      "Wet at range edge",
+      0,
+      1,
+      0.05,
+      DEFAULT_WET_FAR,
+    );
   bindSlider("reverb-decay", (value) => {
     engine.setReverb({ decaySeconds: value });
   });
@@ -102,9 +119,18 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     engine.setReverb({ dampingHz: value });
   });
   bindSlider(
-    "reverb-level",
+    "reverb-wet-near",
     (value) => {
-      engine.setReverbLevel(value);
+      engine.setReverbMix({ near: value });
+      dirty = true;
+    },
+    { hardMin: 0, hardMax: 1 },
+  );
+  bindSlider(
+    "reverb-wet-far",
+    (value) => {
+      engine.setReverbMix({ far: value });
+      dirty = true;
     },
     { hardMin: 0, hardMax: 1 },
   );

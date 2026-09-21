@@ -29,7 +29,7 @@ components are a bonus, and should land in `bruit-kit`.
 | Listener | Position + heading; starts at the bottom edge facing up. Mouse: drag the body to move, drag a nose handle to rotate. Keyboard: WASD walks *relative to facing* (W forward, A/D strafe), Q/E rotate, all usable simultaneously |
 | Spatialization | HRTF `PannerNode` (front/back EQ and head shadow come from the HRTF itself — no custom filter). Headphones assumed |
 | Distance | One attenuation curve shared by all objects, reaching silence at a max distance. Per-object gain sets how loud each object is, so louder objects are audible from farther away |
-| Reverb | One global reverb, listener-independent. Room size maps to decay/pre-delay/damping, not geometry. Per-object send has a gentler rolloff than the dry signal, so distant sources get relatively more reverb |
+| Reverb | One global reverb, listener-independent. Room size maps to decay/pre-delay/damping, not geometry. Each object's *wet fraction* (share of its sound that is reverb vs direct) is interpolated linearly from a "wet at object" setting (listener on top of it, default 0.2) to a "wet at range edge" setting (default 0.8). Direct = total × (1 − wet), send = total × wet, where total follows the shared distance curve, so both fade to silence together at the hearing range |
 | Recording | Lossless PCM capture of the master output, written directly to `.wav`. Not `MediaRecorder` (see below) |
 | Object state | Each object is open (the plain sound) or closed (muffled), and every object starts closed. Click it on the map to toggle; a drag moves it without toggling. Closed = a lowpass whose cutoff (default 200 Hz) and sweep time (default 700 ms) are global settings. The sweep is exponential in frequency, from Nyquist (an identity filter, so open is truly unfiltered) down to the cutoff, and can be reversed mid-sweep. The filter sits before both the dry path and the reverb send, so a closed object's reverb is muffled too |
 | Visuals | Minimal technical map. The sound is what matters. Closed objects draw as hollow rings |
@@ -78,8 +78,8 @@ sample (loop, random offset) ─► lowpass (open/closed) ─┬─► objectGai
 
 - The panner does direction only. `distanceModel` is neutralised (large
   `refDistance`, `rolloffFactor: 0`) and distance gain is computed by our own
-  pure function, because the built-in models can't reach silence and we need the
-  same number for the reverb send.
+  pure function, because the built-in models can't reach silence and the same
+  number has to split between the direct path and the reverb send.
 - Room is X/Z with Y fixed at 0. Listener heading goes into the
   `AudioListener`'s forward vector.
 - Gain changes on move use `setTargetAtTime`, not direct assignment, to avoid
@@ -106,7 +106,7 @@ Two repos are touched, so this is a cross-repo change.
 
 **`bruit-kit` (MINOR bump, new exports, demos where there's UI or audio):**
 - `audio/spatialMath.ts` — `distanceGain(distance, maxDistance, exponent)`,
-  one pure function: exponent 2 for the dry signal, 1 for the reverb send. No
+  one pure function (bruit-space uses exponent 2 for an object's total level; the reverb balance is a separate wet-fraction mix). No
   nodes, no DOM. (A listener-relative-angle helper was planned and dropped: the
   HRTF panner does direction natively, so nothing needed it.)
 - `audio/aiffDecoder.ts` — pure PCM AIFF parser (8/16/24/32-bit, AIFF or AIFC
