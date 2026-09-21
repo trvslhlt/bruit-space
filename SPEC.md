@@ -25,7 +25,7 @@ components are a bonus, and should land in `bruit-kit`.
 | Input | `<input webkitdirectory>`; `.wav` / `.mp3` via `decodeAudioData`; `.aif`/`.aiff` via a hand-written parser (`decodeAiff` in bruit-kit), so no conversion step. The real sample folder is 57 files of 24-bit big-endian AIFF |
 | Object cap | Configurable, default 15. A larger folder is randomly subsampled; a "reshuffle" re-picks and re-places |
 | Placement | Random on load, then drag to adjust |
-| Playback | Loop only for now. Each loop starts at a random offset so loops don't line up |
+| Playback | One global **sample window** (0.05–1, default 1) sets what share of each sample plays per pass. A pass plays `window × the sample's length` from a start chosen uniformly at random in `[0, 1 − window]` of the sample, so it never runs past the end (higher window = longer pass, less randomness); the next pass then starts, equal-power crossfaded (30 ms). It's a pure proportion: no min/max seconds clamp (considered and rejected, see FUTURE.md) beyond a 50 ms floor so a tiny window on a very short sample can't ask for a zero-length fragment. Window 1 is a plain native loop from a random start offset, exactly the earlier behaviour |
 | Listener | Position + heading; starts at the bottom edge facing up. Mouse: drag the body to move, drag a nose handle to rotate. Keyboard: WASD walks *relative to facing* (W forward, A/D strafe), Q/E rotate, all usable simultaneously |
 | Spatialization | HRTF `PannerNode` (front/back EQ and head shadow come from the HRTF itself — no custom filter). Headphones assumed |
 | Distance | One attenuation curve shared by all objects, reaching silence at a max distance. Per-object gain sets how loud each object is, so louder objects are audible from farther away |
@@ -71,7 +71,7 @@ farther in metres. The curve's cutoff is expressed in room units, not pixels.
 ## Audio graph
 
 ```
-sample (loop, random offset) ─► lowpass (open/closed) ─┬─► objectGain ─► PannerNode(HRTF) ─┐
+sample (window passes, or loop) ─► lowpass (open/closed) ─┬─► objectGain ─► PannerNode(HRTF) ─┐
                                                         │                                    ├─► master ─► speakers
                                                         └─► sendGain ─► shared Reverb ───────┘        └─► PCM recorder ─► .wav
 ```
@@ -86,8 +86,12 @@ sample (loop, random offset) ─► lowpass (open/closed) ─┬─► objectGai
   zipper noise.
 - The panner downmixes each source to mono. Fine for point sources; stereo
   samples lose width.
-- Random loop offset is `source.start(0, Math.random() * duration)`.
-  `radio-tuner`'s clock-synced offset (`loopedElapsed`) isn't needed — that's for
+- At window 1 the loop starts at `Math.random() * duration` so loops don't line
+  up. Below 1, `PassPlayer` queues passes about 1.5 s ahead on a 250 ms timer
+  (lookahead, because a hidden tab's timers can be throttled); changing the
+  window re-rolls every object immediately -- the old passes fade out and new
+  ones start -- debounced by 120 ms so a slider drag doesn't restart them at
+  every step. `radio-tuner`'s clock-synced offset (`loopedElapsed`) isn't needed — that's for
   a shared wall clock. Its slow playback-rate drift (±1.5%,
   `audioEngine.ts` `MAX_DRIFT_RATE_OFFSET`) is worth trying later so loops of
   similar length don't settle into a repeating pattern, at the cost of slight
@@ -146,9 +150,13 @@ verified by script and needs a manual listen.
 
 ## Open / deferred
 
-- Loop-only (so no per-object loop toggle); other playback styles (one-shots, retriggering, granular
-  via `bruit-kit` sources) come later.
+- Other playback styles (rests between passes, pitch variation, one-shots,
+  granular), plus the wider list of ideas for making the room more varied, are
+  collected in [FUTURE.md](FUTURE.md).
 - Rate drift on loops: optional, decide by ear.
+- Hidden-tab scheduling is untested: passes are queued 1.5 s ahead, which
+  survives ordinary ~1 s timer throttling, but Chrome throttles a long-hidden
+  tab much harder and a recording could run dry of passes.
 - Closed cutoff/transition are global; per-object values would let a
   "trunk" muffle harder than a "box". Not built.
 - Master level (default 0.9, then the shared limiter) is a first guess. Full-scale

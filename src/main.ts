@@ -17,6 +17,7 @@ import { decodeFile, pickAudioFiles, shuffled } from "./sampleLoader";
 import {
   DEFAULT_CLOSED_CUTOFF_HZ,
   DEFAULT_MASTER_LEVEL,
+  DEFAULT_SAMPLE_WINDOW,
   DEFAULT_TRANSITION_MS,
   DEFAULT_WET_FAR,
   DEFAULT_WET_NEAR,
@@ -158,6 +159,22 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
   bindSlider("closed-transition", (value) => {
     engine.setTransitionMs(value);
   });
+
+  query("#playback-controls").innerHTML = rangeControl(
+    "sample-window",
+    "Sample window",
+    0.05,
+    1,
+    0.01,
+    DEFAULT_SAMPLE_WINDOW,
+  );
+  bindSlider(
+    "sample-window",
+    (value) => {
+      engine.setSampleWindow(value);
+    },
+    { hardMin: 0.05, hardMax: 1 },
+  );
 
   query("#output-controls").innerHTML = rangeControl(
     "master-level",

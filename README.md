@@ -50,6 +50,13 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   in/out over the transition time. Open is the plain, unfiltered sound. **Cutoff** and
   **Transition** under "Closed objects" apply to every object. Dragging an
   object moves it without toggling it.
+- **Sample window** (Playback panel, default 1) is the share of each sample
+  played per pass. At 0.9 each pass plays 90% of the sample from a random
+  start between 0% and 10% of the way in, then the next pass begins,
+  crossfaded; lower windows give shorter, more varied fragments. At 1 the
+  sample simply loops. It's a pure proportion of each sample's own length,
+  so the same setting gives a short fragment of a short sample and a long
+  one of a long sample.
 - **Hearing range** is the distance at which every object falls to
   silence (dashed ring on the map). One curve for all objects — a louder
   object is simply still audible from farther away.

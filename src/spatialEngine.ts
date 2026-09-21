@@ -6,6 +6,7 @@ import {
   preloadPcmRecorderWorklet,
 } from "bruit-kit/audio";
 import { connectToOutput, getSharedLimiter } from "./audioContext";
+import { PassPlayer } from "./passPlayer";
 import { type RoomState, reverbWetFraction } from "./room";
 
 // One distance curve (silent at the hearing range) sets an object's total
@@ -25,6 +26,13 @@ const SMOOTHING_SECONDS = 0.03;
 export const DEFAULT_MASTER_LEVEL = 0.9;
 export const DEFAULT_WET_NEAR = 0.2;
 export const DEFAULT_WET_FAR = 0.8;
+export const DEFAULT_SAMPLE_WINDOW = 1;
+
+const SCHEDULE_INTERVAL_MS = 250;
+// A slider drag fires many input events; each window change re-rolls every
+// object's passes, so wait for it to settle rather than restarting them at
+// every intermediate value.
+const WINDOW_DEBOUNCE_MS = 120;
 export const DEFAULT_CLOSED_CUTOFF_HZ = 200;
 export const DEFAULT_TRANSITION_MS = 700;
 
@@ -33,7 +41,7 @@ export const DEFAULT_TRANSITION_MS = 700;
 const CUTOFF_RETARGET_SECONDS = 0.05;
 
 interface Voice {
-  source: AudioBufferSourceNode;
+  player: PassPlayer;
   filter: BiquadFilterNode;
   closed: boolean;
   gain: GainNode;
@@ -50,6 +58,8 @@ export class SpatialEngine {
   private wetFar = DEFAULT_WET_FAR;
   private closedCutoffHz = DEFAULT_CLOSED_CUTOFF_HZ;
   private transitionSeconds = DEFAULT_TRANSITION_MS / 1000;
+  private sampleWindow = DEFAULT_SAMPLE_WINDOW;
+  private windowTimer: number | undefined;
 
   static async create(audioContext: AudioContext): Promise<SpatialEngine> {
     await preloadPcmRecorderWorklet(
@@ -78,6 +88,10 @@ export class SpatialEngine {
       audioContext,
       getSharedLimiter(audioContext).output,
     );
+
+    window.setInterval(() => {
+      for (const voice of this.voices.values()) voice.player.schedule();
+    }, SCHEDULE_INTERVAL_MS);
   }
 
   setReverb(params: Partial<Omit<ReverbEffectParams, "wet">>): void {
@@ -148,11 +162,19 @@ export class SpatialEngine {
     if (mix.far !== undefined) this.wetFar = mix.far;
   }
 
-  addObject(id: number, buffer: AudioBuffer, closed: boolean): void {
-    const source = this.audioContext.createBufferSource();
-    source.buffer = buffer;
-    source.loop = true;
+  /** Share of each sample played per pass (1 = the whole sample, looped).
+   * Applied to every object once the value stops changing. */
+  setSampleWindow(fraction: number): void {
+    this.sampleWindow = fraction;
+    window.clearTimeout(this.windowTimer);
+    this.windowTimer = window.setTimeout(() => {
+      for (const voice of this.voices.values()) {
+        voice.player.setWindow(fraction);
+      }
+    }, WINDOW_DEBOUNCE_MS);
+  }
 
+  addObject(id: number, buffer: AudioBuffer, closed: boolean): void {
     // Before both the dry path and the reverb send, so a closed object's
     // reverb is muffled too. Q of -3.01 dB is Butterworth (no resonant
     // bump at the cutoff); BiquadFilterNode's default Q would add a peak
@@ -183,19 +205,22 @@ export class SpatialEngine {
       rolloffFactor: 0,
     });
 
-    source.connect(filter);
     filter.connect(gain).connect(panner).connect(this.master);
     filter.connect(send).connect(this.reverb.input);
 
-    // Random start so loops of similar length don't begin phase-aligned.
-    source.start(0, Math.random() * buffer.duration);
-    this.voices.set(id, { source, filter, closed, gain, send, panner });
+    // Starts playing straight away; silent until update() opens the gains.
+    const player = new PassPlayer(
+      this.audioContext,
+      buffer,
+      filter,
+      this.sampleWindow,
+    );
+    this.voices.set(id, { player, filter, closed, gain, send, panner });
   }
 
   clearObjects(): void {
     for (const voice of this.voices.values()) {
-      voice.source.stop();
-      voice.source.disconnect();
+      voice.player.stop();
       voice.filter.disconnect();
       voice.gain.disconnect();
       voice.send.disconnect();

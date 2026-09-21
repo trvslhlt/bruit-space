@@ -115,9 +115,9 @@ const page = await browser.newPage();
 await page.addInitScript(() => {
   const Original = window.BiquadFilterNode;
   window.__filters = [];
-  // Every GainNode from createGain(), in creation order: a sound object's
-  // voice creates its direct-path gain then its reverb-send gain, so the
-  // last two are the most recently placed object's.
+  // Every GainNode from createGain(), in creation order. A newly placed
+  // sound object creates its direct-path gain, then its reverb-send gain,
+  // then (at window 1) its player's bus -- see toneGainIndex below.
   window.__gains = [];
   const originalCreateGain = BaseAudioContext.prototype.createGain;
   BaseAudioContext.prototype.createGain = function (...args) {
@@ -177,6 +177,22 @@ async function hold(key, ms) {
   await page.keyboard.up(key);
   await page.waitForTimeout(100);
 }
+
+// Records every AudioBufferSourceNode.start() call -- (when, offset,
+// duration) and whether it's a native loop -- so the pass scheduling can be
+// checked exactly, without inferring it from the audio.
+await page.addInitScript(() => {
+  window.__starts = [];
+  const originalStart = AudioBufferSourceNode.prototype.start;
+  AudioBufferSourceNode.prototype.start = function (...args) {
+    window.__starts.push({
+      args,
+      loop: this.loop,
+      bufferDuration: this.buffer?.duration,
+    });
+    return originalStart.apply(this, args);
+  };
+});
 
 await page.goto(baseUrl);
 // The button only exists if the browser left the AudioContext suspended.
@@ -396,6 +412,11 @@ mkdirSync(toneDir, { recursive: true });
 writeFileSync(path.join(toneDir, "bright.wav"), wavFile(sineSamples(3000)));
 await page.setInputFiles("#folder-input", toneDir);
 await waitForStatus(/^1 of 1 files placed/);
+// The tone object's direct and send gains are the two gains created just
+// before its player's bus (window is still at its default of 1 here, so the
+// player has made exactly one gain). Later passes create more, which is why
+// this is captured now rather than counted from the end later.
+const toneGainIndex = (await page.evaluate(() => window.__gains.length)) - 3;
 await setSlider("hearing-range", 40);
 const toneId = (await canvasObjects())[0].id;
 await page
@@ -529,10 +550,13 @@ async function voiceMix() {
   await page.waitForTimeout(400);
   const readout = await page.textContent("#selected-readout");
   const distance = Number(readout.match(/([\d.]+) m away/)[1]);
-  const [direct, send] = await page.evaluate(() => [
-    window.__gains.at(-2).gain.value,
-    window.__gains.at(-1).gain.value,
-  ]);
+  const [direct, send] = await page.evaluate(
+    (index) => [
+      window.__gains[index].gain.value,
+      window.__gains[index + 1].gain.value,
+    ],
+    toneGainIndex,
+  );
   return { distance, direct, send };
 }
 for (const [near, far] of [
@@ -557,6 +581,123 @@ for (const [near, far] of [
     );
   }
 }
+// --- Sample window. First the pure planning math, exactly.
+const plans = await page.evaluate(async () => {
+  const { planPass, MIN_PASS_SECONDS } = await import("/src/passMath.ts");
+  return {
+    floor: MIN_PASS_SECONDS,
+    lowest: planPass(10, 0.9, 0),
+    highest: planPass(10, 0.9, 0.999999),
+    whole: planPass(10, 1, 0.7),
+    tiny: planPass(1.25, 0.001, 0.5),
+    shortSample: planPass(0.03, 0.5, 0.5),
+  };
+});
+const near = (a, b) => Math.abs(a - b) < 1e-3;
+if (
+  near(plans.lowest.offset, 0) &&
+  near(plans.lowest.length, 9) &&
+  plans.highest.offset <= 1 &&
+  plans.highest.offset > 0.99 &&
+  plans.highest.offset + plans.highest.length <= 10 &&
+  near(plans.whole.offset, 0) &&
+  near(plans.whole.length, 10) &&
+  near(plans.tiny.length, plans.floor) &&
+  near(plans.shortSample.length, 0.03) &&
+  near(plans.shortSample.offset, 0)
+) {
+  ok(
+    "window 0.9 on 10 s starts within 0..1 s and never overruns; 1 = whole sample; floor holds",
+  );
+} else {
+  fail(`bad pass planning: ${JSON.stringify(plans)}`);
+}
+
+// Then what the app actually schedules, on the 1 s tone. It's closed after
+// the sweep test; open it so the continuity check can hear it.
+await rowButton(toneId).click();
+await page.waitForTimeout(2000);
+const startsBefore = await page.evaluate(() => window.__starts.length);
+await setSlider("sample-window", 0.5);
+await page.waitForTimeout(3500);
+const passes = (
+  await page.evaluate((from) => window.__starts.slice(from), startsBefore)
+)
+  .filter((entry) => entry.args.length === 3 && !entry.loop)
+  .map(({ args: [when, offset, duration], bufferDuration }) => ({
+    when,
+    offset,
+    duration,
+    bufferDuration,
+  }))
+  .sort((a, b) => a.when - b.when);
+const fitsInSample = passes.every(
+  (pass) =>
+    Math.abs(pass.duration - 0.5) < 0.005 &&
+    pass.offset >= 0 &&
+    pass.offset + pass.duration <= pass.bufferDuration + 0.001,
+);
+const distinctOffsets = new Set(passes.map((p) => p.offset.toFixed(3))).size;
+const overlapping = passes.every(
+  (pass, i) =>
+    i === 0 || pass.when < passes[i - 1].when + passes[i - 1].duration,
+);
+if (passes.length >= 4 && fitsInSample && distinctOffsets >= 3) {
+  ok(
+    `window 0.5 on a 1 s sample: ${passes.length} passes of 0.5 s, ${distinctOffsets} distinct random starts, none past the end`,
+  );
+} else {
+  fail(`bad passes: ${JSON.stringify(passes)}`);
+}
+if (overlapping)
+  ok("each pass starts before the previous one ends (crossfaded, no gaps)");
+else fail("passes leave a gap between them");
+
+// Reverb off for this: phase-jumping fragments of a pure tone interfere in
+// the reverb tail, which makes the level wander for reasons unrelated to
+// gaps. Dry only, a dip can only come from the crossfade itself.
+await setSlider("reverb-wet-near", 0);
+await setSlider("reverb-wet-far", 0);
+const windowLevels = await recordWindows({ totalMs: 2000 });
+const sorted = [...windowLevels.slice(1, -1)].sort((a, b) => a - b);
+const median = sorted[Math.floor(sorted.length / 2)];
+if (median > 0.005 && Math.min(...windowLevels.slice(1, -1)) > median * 0.6) {
+  ok(
+    `recorded level stays steady through the passes (min ${Math.min(...windowLevels.slice(1, -1)).toFixed(3)} vs median ${median.toFixed(3)})`,
+  );
+} else {
+  fail(
+    `level dips between passes: ${windowLevels.map((v) => v.toFixed(3)).join(" ")}`,
+  );
+}
+
+// Window 1 goes back to a plain native loop, and stops scheduling passes.
+await setSlider("sample-window", 1);
+await page.waitForTimeout(1000);
+const loopMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(3000);
+const afterLoop = await page.evaluate(
+  (from) => ({
+    newStarts: window.__starts.length - from,
+    lastIsLoop: window.__starts.at(-1).loop,
+  }),
+  loopMark,
+);
+if (afterLoop.newStarts === 0 && afterLoop.lastIsLoop) {
+  ok("window 1 is a native loop again and schedules no further passes");
+} else {
+  fail(`window 1 should be a plain loop: ${JSON.stringify(afterLoop)}`);
+}
+
+await setSlider("sample-window", 0.3);
+await page.waitForTimeout(1500);
+const resumed = await page.evaluate(
+  (from) => window.__starts.length - from,
+  loopMark,
+);
+if (resumed >= 2) ok("dropping the window below 1 again resumes passes");
+else fail(`expected passes to resume, got ${resumed} new starts`);
+
 rmSync(toneDir, { recursive: true, force: true });
 
 if (errors.length > 0) fail(`console/page errors:\n  ${errors.join("\n  ")}`);
