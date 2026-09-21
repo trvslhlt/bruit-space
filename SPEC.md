@@ -31,7 +31,7 @@ components are a bonus, and should land in `bruit-kit`.
 | Distance | One attenuation curve shared by all objects, reaching silence at a max distance. Per-object gain sets how loud each object is, so louder objects are audible from farther away |
 | Reverb | One global reverb, listener-independent. Room size maps to decay/pre-delay/damping, not geometry. Per-object send has a gentler rolloff than the dry signal, so distant sources get relatively more reverb |
 | Recording | Lossless PCM capture of the master output, written directly to `.wav`. Not `MediaRecorder` (see below) |
-| Object state | Each object is open (the plain sound) or closed (muffled), and every object starts closed. Click it on the map to toggle; a drag moves it without toggling. Closed = a lowpass whose cutoff (default 800 Hz) and sweep time (default 400 ms) are global settings. The sweep is exponential in frequency, from Nyquist (an identity filter, so open is truly unfiltered) down to the cutoff, and can be reversed mid-sweep. The filter sits before both the dry path and the reverb send, so a closed object's reverb is muffled too |
+| Object state | Each object is open (the plain sound) or closed (muffled), and every object starts closed. Click it on the map to toggle; a drag moves it without toggling. Closed = a lowpass whose cutoff (default 200 Hz) and sweep time (default 700 ms) are global settings. The sweep is exponential in frequency, from Nyquist (an identity filter, so open is truly unfiltered) down to the cutoff, and can be reversed mid-sweep. The filter sits before both the dry path and the reverb send, so a closed object's reverb is muffled too |
 | Visuals | Minimal technical map. The sound is what matters. Closed objects draw as hollow rings |
 
 Non-goals: wall/occlusion modelling, listener-position-dependent reverb,
@@ -46,8 +46,8 @@ modes (later).
 |                                          [● Rec 00:00]  [Download]   |
 +---------------------+------------------------------------------------+
 | ROOM                |                                                |
-|  width   [ 12 m ]   |      ◉ box.aif                                 |
-|  height  [  8 m ]   |                         ◉ crate.wav            |
+|  width   [ 20 m ]   |      ◉ box.aif                                 |
+|  height  [ 20 m ]   |                         ◉ crate.wav            |
 |                     |                 ╲ │ ╱                          |
 | REVERB              |                  ▲   listener + heading        |
 |  decay   [ 2.0 s ]  |            ◉ trunk.mp3                         |
@@ -151,7 +151,7 @@ verified by script and needs a manual listen.
 - Rate drift on loops: optional, decide by ear.
 - Closed cutoff/transition are global; per-object values would let a
   "trunk" muffle harder than a "box". Not built.
-- Master headroom (0.6, then the shared limiter) is a first guess. Full-scale
+- Master level (default 0.9, then the shared limiter) is a first guess. Full-scale
   drone samples summed from many nearby objects can push the limiter; tune by
   ear.
 - HRTF front/back quality: needs a listen over headphones.

@@ -53,7 +53,7 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
 - **Hearing range** is the distance at which every object falls to
   silence (dashed ring on the map). One curve for all objects — a louder
   object is simply still audible from farther away.
-- **Master** sets the overall level (default 0.4). Loud samples with
+- **Master** sets the overall level (default 0.9). Loud samples with
   several audible at once can push a recording to full scale; lower it if
   the shared limiter starts audibly pumping.
 - **Record** captures exactly what you're hearing as 16-bit stereo PCM

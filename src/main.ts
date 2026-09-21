@@ -22,6 +22,7 @@ import {
 } from "./spatialEngine";
 
 const MIN_SPAWN_DISTANCE_FROM_LISTENER = 1.5;
+const DEFAULT_ROOM_SIZE = 20; // metres, both width and height
 
 function query<T extends HTMLElement>(selector: string): T {
   return document.querySelector<T>(selector)!;
@@ -32,12 +33,16 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
   query("#app").hidden = false;
 
   const room: RoomState = {
-    width: 12,
-    height: 8,
+    width: DEFAULT_ROOM_SIZE,
+    height: DEFAULT_ROOM_SIZE,
     hearingRange: 8,
-    // Starts at the bottom edge facing up, like just having climbed in
-    // through the attic hatch.
-    listener: { x: 6, y: 7, heading: 0 },
+    // Starts at the middle of the bottom edge facing up, like just having
+    // climbed in through the attic hatch.
+    listener: {
+      x: DEFAULT_ROOM_SIZE / 2,
+      y: DEFAULT_ROOM_SIZE - 1,
+      heading: 0,
+    },
     objects: [],
     selectedId: null,
   };

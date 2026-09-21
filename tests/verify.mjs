@@ -377,7 +377,7 @@ if (wav.filename.endsWith(".wav")) ok("download is named .wav");
 else fail(`unexpected download name ${wav.filename}`);
 
 // --- Closing muffles the sound, gradually. One 3 kHz tone, well above the
-// default 800 Hz cutoff, so closing should take nearly all of it away. (Not
+// default closed cutoff, so closing should take nearly all of it away. (Not
 // higher: near 8 kHz the HRTF's own level swings by ~10x with the object's
 // random direction, which makes absolute levels unreliable.)
 const toneDir = path.join(os.tmpdir(), "bruit-space-verify-tone");
@@ -476,7 +476,7 @@ await rowButton(toneId).click();
 const { samples, q, nyquist } = await polling;
 
 const hz = samples.map(([, value]) => value);
-const closedHz = 800;
+const closedHz = Number(await page.inputValue("#closed-cutoff"));
 const first = samples.find(([, value]) => value < nyquist * 0.98);
 const last = samples.find(([, value]) => value <= closedHz * 1.02);
 const midSweep = hz.filter((v) => v > closedHz * 1.05 && v < nyquist * 0.95);

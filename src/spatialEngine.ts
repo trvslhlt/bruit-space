@@ -20,9 +20,9 @@ const REVERB_SEND_ROLLOFF_EXPONENT = 1;
 // moves between animation frames.
 const SMOOTHING_SECONDS = 0.03;
 
-export const DEFAULT_MASTER_LEVEL = 0.4;
-export const DEFAULT_CLOSED_CUTOFF_HZ = 800;
-export const DEFAULT_TRANSITION_MS = 400;
+export const DEFAULT_MASTER_LEVEL = 0.9;
+export const DEFAULT_CLOSED_CUTOFF_HZ = 200;
+export const DEFAULT_TRANSITION_MS = 700;
 
 // Retargeting an already-closed object's cutoff while its slider is being
 // dragged: quick enough to track the slider, slow enough not to zipper.
@@ -55,10 +55,10 @@ export class SpatialEngine {
   }
 
   private constructor(private audioContext: AudioContext) {
-    // Headroom for many overlapping loops; the shared limiter after this is
-    // a safety net, not the thing doing the level management. Full-scale
-    // samples with several audible at once clip a recording at higher
-    // settings -- see the "Master" slider for tuning by ear.
+    // Level for the summed loops; the shared limiter after this only
+    // catches peaks. Loud full-scale samples with several audible at once
+    // can push it (or a recording) to full scale at high settings -- the
+    // "Master" slider is the fix, by ear.
     this.master = audioContext.createGain();
     this.master.gain.value = DEFAULT_MASTER_LEVEL;
     connectToOutput(this.master, audioContext);
