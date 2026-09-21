@@ -6,7 +6,8 @@ import {
   preloadPcmRecorderWorklet,
 } from "bruit-kit/audio";
 import { connectToOutput, getSharedLimiter } from "./audioContext";
-import { PassPlayer } from "./passPlayer";
+import type { StartMode } from "./passMath";
+import { type PassConfig, PassPlayer } from "./passPlayer";
 import { type RoomState, reverbWetFraction } from "./room";
 
 // One distance curve (silent at the hearing range) sets an object's total
@@ -27,12 +28,16 @@ export const DEFAULT_MASTER_LEVEL = 0.9;
 export const DEFAULT_WET_NEAR = 0.2;
 export const DEFAULT_WET_FAR = 0.8;
 export const DEFAULT_SAMPLE_WINDOW = 1;
+export const DEFAULT_START_MODE: StartMode = "random";
+export const DEFAULT_WANDER_SPEED = 0.5;
+export const DEFAULT_REST_PROBABILITY = 0;
+export const DEFAULT_REST_MAX_MS = 1500;
 
 const SCHEDULE_INTERVAL_MS = 250;
-// A slider drag fires many input events; each window change re-rolls every
-// object's passes, so wait for it to settle rather than restarting them at
-// every intermediate value.
-const WINDOW_DEBOUNCE_MS = 120;
+// A slider drag fires many input events; each window or start-mode change
+// re-rolls every object's passes, so wait for it to settle rather than
+// restarting them at every intermediate value.
+const PLAYBACK_DEBOUNCE_MS = 120;
 export const DEFAULT_CLOSED_CUTOFF_HZ = 200;
 export const DEFAULT_TRANSITION_MS = 700;
 
@@ -58,8 +63,14 @@ export class SpatialEngine {
   private wetFar = DEFAULT_WET_FAR;
   private closedCutoffHz = DEFAULT_CLOSED_CUTOFF_HZ;
   private transitionSeconds = DEFAULT_TRANSITION_MS / 1000;
-  private sampleWindow = DEFAULT_SAMPLE_WINDOW;
-  private windowTimer: number | undefined;
+  private playback: PassConfig = {
+    windowFraction: DEFAULT_SAMPLE_WINDOW,
+    startMode: DEFAULT_START_MODE,
+    wanderSpeed: DEFAULT_WANDER_SPEED,
+    restProbability: DEFAULT_REST_PROBABILITY,
+    restMaxMs: DEFAULT_REST_MAX_MS,
+  };
+  private playbackTimer: number | undefined;
 
   static async create(audioContext: AudioContext): Promise<SpatialEngine> {
     await preloadPcmRecorderWorklet(
@@ -162,16 +173,18 @@ export class SpatialEngine {
     if (mix.far !== undefined) this.wetFar = mix.far;
   }
 
-  /** Share of each sample played per pass (1 = the whole sample, looped).
-   * Applied to every object once the value stops changing. */
-  setSampleWindow(fraction: number): void {
-    this.sampleWindow = fraction;
-    window.clearTimeout(this.windowTimer);
-    this.windowTimer = window.setTimeout(() => {
+  /** Share of each sample played per pass (1 = the whole sample, looped),
+   * how each pass picks its start, how fast a wander drifts, and how often
+   * and how long the rests between passes are. Applied to every object
+   * once the values stop changing. */
+  setPlayback(change: Partial<PassConfig>): void {
+    this.playback = { ...this.playback, ...change };
+    window.clearTimeout(this.playbackTimer);
+    this.playbackTimer = window.setTimeout(() => {
       for (const voice of this.voices.values()) {
-        voice.player.setWindow(fraction);
+        voice.player.configure(this.playback);
       }
-    }, WINDOW_DEBOUNCE_MS);
+    }, PLAYBACK_DEBOUNCE_MS);
   }
 
   addObject(id: number, buffer: AudioBuffer, closed: boolean): void {
@@ -213,7 +226,7 @@ export class SpatialEngine {
       this.audioContext,
       buffer,
       filter,
-      this.sampleWindow,
+      this.playback,
     );
     this.voices.set(id, { player, filter, closed, gain, send, panner });
   }

@@ -1,18 +1,35 @@
 # bruit-space — future ideas
 
 Collected after the first version was built. Nothing here is committed to;
-within each group the order is a rough suggested priority. See
-[SPEC.md](SPEC.md) for what exists and why.
+within each group the order is a rough suggested priority. Struck-through
+items are done. See [SPEC.md](SPEC.md) for what exists and why.
 
 ## Playback variety
 
-- **Rests between passes.** A "gap" setting (0 = seamless, higher = silence
-  between passes) so sounds come and go, like a cursory look around. It's a
-  small extension of `PassPlayer`'s scheduler.
+- ~~**Rests between passes.** A "gap" setting (0 = seamless, higher = silence
+  between passes) so sounds come and go, like a cursory look around.~~ Done:
+  the Rest probability and Rest max sliders.
+- **Rest refinements.** Rests exist (a global probability per pass and a
+  maximum duration, each rest uniformly random up to it). Possible additions:
+  a minimum duration or a different distribution (mostly short with the
+  occasional long one), per-object scatter, and rests scaled to the pass
+  length so a 54 s sample and a 1 s one feel comparable. Also, at window 1
+  with rests on, passes always start at the sample's beginning, where the
+  plain loop starts at a random offset; objects of identical length could
+  therefore begin in step until their random rests pull them apart.
 - **Per-pass pitch/rate variation** (a few semitones either way) and a
   probability that a pass plays reversed.
-- **Other start modes.** Instead of a uniformly random start, slowly scan the
-  start point through the sample, or hold it fixed.
+- ~~**Other start modes.** Instead of a uniformly random start, slowly scan the
+  start point through the sample, or hold it fixed.~~ Done: the `wander` start
+  mode (wander speed 0 holds the start still).
+- **More start modes.** `random` and `wander` exist. Possible additions: a
+  wander with momentum (a drift that keeps its direction rather than gliding
+  to a target and retargeting), or a steady scan that sweeps the start
+  through the sample.
+- **Wander speed per object, or in seconds.** It's global and measured in
+  passes, so a sample with long passes evolves more slowly in real time than
+  one with short passes. Per-object scatter, or a seconds-based speed, would
+  even that out.
 - **Slow playback-rate drift**, as in radio-tuner (`MAX_DRIFT_RATE_OFFSET`,
   about ±1.5%), paced with bruit-kit's `driftMath`, so long passes of similar
   length don't settle into a repeating pattern. Costs a slight detune.

@@ -1,4 +1,11 @@
-import { planPass } from "./passMath";
+import {
+  type StartMode,
+  type WanderState,
+  advanceWander,
+  initialWanderState,
+  planPass,
+  planRest,
+} from "./passMath";
 
 // Scheduled this far ahead, because timers in a background tab can be
 // throttled to about once a second -- a recording must keep going when the
@@ -25,38 +32,68 @@ const FADE_OUT = Float32Array.from({ length: CURVE_POINTS }, (_, i) =>
   Math.cos((i / (CURVE_POINTS - 1)) * (Math.PI / 2)),
 );
 
+export interface PassConfig {
+  /** Share of the sample each pass plays; 1 is a plain native loop. */
+  windowFraction: number;
+  startMode: StartMode;
+  /** How fast `wander` mode drifts, 0..1 (0 holds the start still). */
+  wanderSpeed: number;
+  /** Chance (0..1) of a rest after each pass. */
+  restProbability: number;
+  /** Longest rest, in milliseconds; each one is random up to this. */
+  restMaxMs: number;
+}
+
+/** Window 1 with no rests is a plain native loop. Anything else is a chain
+ * of passes -- including window 1 once rests are on, as full-length passes,
+ * because a native loop has no end-of-loop to rest after. */
+function playsNativeLoop(config: PassConfig): boolean {
+  const resting = config.restProbability > 0 && config.restMaxMs > 0;
+  return config.windowFraction >= 1 && !resting;
+}
+
 /** Plays one sample into `destination`. At window 1 that's a plain native
  * loop from a random start (each loop starts at a different spot so loops
  * don't line up). Below 1 it's a chain of passes: each plays `window x
- * length` of the sample from a fresh random start, crossfaded into the
- * next -- see planPass. */
+ * length` of the sample from a start chosen by the start mode, crossfaded
+ * into the next -- see planPass. */
 export class PassPlayer {
   private bus: GainNode | null = null;
   private sources = new Set<AudioBufferSourceNode>();
   private nextStartTime = 0;
+  // Kept for the player's whole life, not reset when the window changes,
+  // so a wander carries on from where it was rather than starting over.
+  private wander: WanderState = initialWanderState();
 
   constructor(
     private audioContext: AudioContext,
     private buffer: AudioBuffer,
     private destination: AudioNode,
-    private windowFraction: number,
+    private config: PassConfig,
   ) {
     this.begin();
   }
 
-  /** Re-rolls immediately: whatever's playing fades out and a fresh set of
-   * passes starts under the new window. Waiting for the current pass to
-   * finish would mean up to a whole sample's length of lag. */
-  setWindow(fraction: number): void {
-    if (fraction === this.windowFraction) return;
-    this.windowFraction = fraction;
+  /** A changed window or start mode re-rolls immediately: whatever's
+   * playing fades out and a fresh set of passes starts. Waiting for the
+   * current pass to finish would mean up to a whole sample's length of
+   * lag. So does turning rests on or off at window 1, which switches
+   * between a native loop and passes. A changed wander speed or rest
+   * setting otherwise just applies from the next pass. */
+  configure(next: PassConfig): void {
+    const reroll =
+      next.windowFraction !== this.config.windowFraction ||
+      next.startMode !== this.config.startMode ||
+      playsNativeLoop(next) !== playsNativeLoop(this.config);
+    this.config = { ...next };
+    if (!reroll) return;
     this.retire();
     this.begin();
   }
 
   /** Queues passes up to the lookahead horizon; call this on a timer. */
   schedule(): void {
-    if (!this.bus || this.windowFraction >= 1) return;
+    if (!this.bus || playsNativeLoop(this.config)) return;
     const horizon = this.audioContext.currentTime + LOOKAHEAD_SECONDS;
     while (this.nextStartTime < horizon) this.queuePass(this.nextStartTime);
   }
@@ -76,7 +113,7 @@ export class PassPlayer {
     this.bus.connect(this.destination);
     const now = audioContext.currentTime;
 
-    if (this.windowFraction >= 1) {
+    if (playsNativeLoop(this.config)) {
       this.bus.gain.value = 0;
       this.bus.gain.setTargetAtTime(1, now, RETIRE_TIME_CONSTANT);
       const source = audioContext.createBufferSource();
@@ -94,7 +131,18 @@ export class PassPlayer {
 
   private queuePass(startTime: number): void {
     const { audioContext, buffer } = this;
-    const { offset, length } = planPass(buffer.duration, this.windowFraction);
+    // Wander uses the current position for this pass, then drifts for the
+    // next; random leaves it to planPass.
+    let startFraction: number | undefined;
+    if (this.config.startMode === "wander") {
+      startFraction = this.wander.position;
+      this.wander = advanceWander(this.wander, this.config.wanderSpeed);
+    }
+    const { offset, length } = planPass(
+      buffer.duration,
+      this.config.windowFraction,
+      startFraction,
+    );
     // Under half the pass each, so the two curves never touch (adjacent
     // value-curve events on one param aren't allowed to overlap).
     const fade = Math.min(FADE_SECONDS, length * 0.45);
@@ -109,7 +157,16 @@ export class PassPlayer {
     source.start(startTime, offset, length);
     this.track(source);
 
-    this.nextStartTime = startTime + length - fade;
+    // A rest is real silence, so no crossfade overlap into the next pass:
+    // this one fades out completely first (its own fade-out curve), then
+    // the next fades in after the rest. Without one, the next starts as
+    // this one begins fading, so there's no gap.
+    const rest = planRest(
+      this.config.restProbability,
+      this.config.restMaxMs / 1000,
+    );
+    this.nextStartTime =
+      rest > 0 ? startTime + length + rest : startTime + length - fade;
   }
 
   private retire(): void {

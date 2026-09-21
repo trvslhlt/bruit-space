@@ -17,8 +17,12 @@ import { decodeFile, pickAudioFiles, shuffled } from "./sampleLoader";
 import {
   DEFAULT_CLOSED_CUTOFF_HZ,
   DEFAULT_MASTER_LEVEL,
+  DEFAULT_REST_MAX_MS,
+  DEFAULT_REST_PROBABILITY,
   DEFAULT_SAMPLE_WINDOW,
+  DEFAULT_START_MODE,
   DEFAULT_TRANSITION_MS,
+  DEFAULT_WANDER_SPEED,
   DEFAULT_WET_FAR,
   DEFAULT_WET_NEAR,
   SpatialEngine,
@@ -160,7 +164,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     engine.setTransitionMs(value);
   });
 
-  query("#playback-controls").innerHTML = rangeControl(
+  const sampleWindowControl = rangeControl(
     "sample-window",
     "Sample window",
     0.05,
@@ -168,13 +172,82 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     0.01,
     DEFAULT_SAMPLE_WINDOW,
   );
+  const wanderSpeedControl = rangeControl(
+    "wander-speed",
+    "Wander speed",
+    0,
+    1,
+    0.01,
+    DEFAULT_WANDER_SPEED,
+  );
+  const restProbabilityControl = rangeControl(
+    "rest-probability",
+    "Rest probability",
+    0,
+    1,
+    0.01,
+    DEFAULT_REST_PROBABILITY,
+  );
+  const restDurationControl = rangeControl(
+    "rest-duration",
+    "Rest max (ms)",
+    0,
+    10000,
+    50,
+    DEFAULT_REST_MAX_MS,
+  );
+  query("#playback-controls").innerHTML = `${sampleWindowControl}
+    <label>
+      <span class="control-name">Start mode</span>
+      <select id="start-mode">
+        <option value="random">Random</option>
+        <option value="wander">Wander</option>
+      </select>
+    </label>
+    ${wanderSpeedControl}
+    ${restProbabilityControl}
+    ${restDurationControl}`;
   bindSlider(
     "sample-window",
     (value) => {
-      engine.setSampleWindow(value);
+      engine.setPlayback({ windowFraction: value });
     },
     { hardMin: 0.05, hardMax: 1 },
   );
+  bindSlider(
+    "wander-speed",
+    (value) => {
+      engine.setPlayback({ wanderSpeed: value });
+    },
+    { hardMin: 0, hardMax: 1 },
+  );
+
+  bindSlider(
+    "rest-probability",
+    (value) => {
+      engine.setPlayback({ restProbability: value });
+    },
+    { hardMin: 0, hardMax: 1 },
+  );
+  bindSlider(
+    "rest-duration",
+    (value) => {
+      engine.setPlayback({ restMaxMs: value });
+    },
+    { hardMin: 0 },
+  );
+
+  const startModeSelect = query<HTMLSelectElement>("#start-mode");
+  const wanderSpeedInput = query<HTMLInputElement>("#wander-speed");
+  startModeSelect.value = DEFAULT_START_MODE;
+  // Wander speed only means something in wander mode.
+  function applyStartMode(): void {
+    const startMode = startModeSelect.value === "wander" ? "wander" : "random";
+    wanderSpeedInput.disabled = startMode !== "wander";
+    engine.setPlayback({ startMode });
+  }
+  startModeSelect.addEventListener("change", applyStartMode);
+  applyStartMode();
 
   query("#output-controls").innerHTML = rangeControl(
     "master-level",

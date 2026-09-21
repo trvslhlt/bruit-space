@@ -50,6 +50,21 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   in/out over the transition time. Open is the plain, unfiltered sound. **Cutoff** and
   **Transition** under "Closed objects" apply to every object. Dragging an
   object moves it without toggling it.
+- **Start mode** picks where each pass starts within the room the window
+  leaves. **Random** (default) picks independently every pass. **Wander**
+  keeps a slowly moving start position: each pass it glides toward a random
+  target and picks a new target on arrival, so successive passes overlap
+  and the loop evolves instead of jumping. **Wander speed** sets how far it
+  glides per pass (0 holds the start still) and is only enabled in wander
+  mode. Speed is counted in passes, not seconds, so samples with long
+  passes evolve more slowly in real time. At window 1 there is no room to
+  move, so neither mode has any effect.
+- **Rests:** after each pass there's a chance (**Rest probability**, default
+  0 = off) of a rest, which is real silence lasting a random time up to
+  **Rest max (ms)**. With no rest the next pass crossfades in as before; with
+  one, the pass fades out, the rest passes, and the next fades in. At window 1
+  a plain loop has no end-of-loop to rest after, so turning rests on makes it
+  a chain of full-length passes (turn them off and it's a native loop again).
 - **Sample window** (Playback panel, default 1) is the share of each sample
   played per pass. At 0.9 each pass plays 90% of the sample from a random
   start between 0% and 10% of the way in, then the next pass begins,

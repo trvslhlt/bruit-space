@@ -698,6 +698,256 @@ const resumed = await page.evaluate(
 if (resumed >= 2) ok("dropping the window below 1 again resumes passes");
 else fail(`expected passes to resume, got ${resumed} new starts`);
 
+// --- Start modes. Wander first as pure math, with exact values.
+const wander = await page.evaluate(async () => {
+  const { advanceWander, initialWanderState, planPass } = await import(
+    "/src/passMath.ts"
+  );
+  let state = initialWanderState(0.2, 0.8);
+  let inRange = true;
+  for (let i = 0; i < 5000; i++) {
+    state = advanceWander(state, 0.7);
+    if (
+      state.position < 0 ||
+      state.position > 1 ||
+      state.target < 0 ||
+      state.target > 1
+    ) {
+      inRange = false;
+    }
+  }
+  return {
+    glide: advanceWander({ position: 0, target: 1 }, 1, 0.123),
+    held: advanceWander({ position: 0.3, target: 0.9 }, 0, 0.5),
+    arrived: advanceWander({ position: 0.94, target: 1 }, 1, 0.25),
+    inRange,
+    planned: planPass(10, 0.5, 0.4),
+  };
+});
+if (
+  near(wander.glide.position, 0.4) &&
+  near(wander.glide.target, 1) &&
+  near(wander.held.position, 0.3) &&
+  near(wander.held.target, 0.9) &&
+  near(wander.arrived.target, 0.25) &&
+  wander.inRange &&
+  near(wander.planned.offset, 2)
+) {
+  ok(
+    "wander glides toward its target, holds at speed 0, retargets on arrival, and stays in range",
+  );
+} else {
+  fail(`bad wander math: ${JSON.stringify(wander)}`);
+}
+
+// Then what the app schedules. Window 0.5 on the 1 s tone leaves a 0.5 s
+// start range; at speed 0.5 a pass can move the start by at most
+// 0.4 * 0.5^2 = 0.1 of that range, i.e. 0.05 s.
+async function passesSince(from) {
+  return (await page.evaluate((index) => window.__starts.slice(index), from))
+    .filter((entry) => entry.args.length === 3 && !entry.loop)
+    .map(({ args: [when, offset, duration] }) => ({ when, offset, duration }))
+    .sort((a, b) => a.when - b.when);
+}
+const offsetSteps = (list) =>
+  list.slice(1).map((pass, i) => Math.abs(pass.offset - list[i].offset));
+
+await setSlider("sample-window", 0.5);
+if (await page.isDisabled("#wander-speed"))
+  ok("wander speed is disabled in random mode");
+else fail("wander speed should be disabled in random mode");
+await page.selectOption("#start-mode", "wander");
+await setSlider("wander-speed", 0.5);
+if (!(await page.isDisabled("#wander-speed")))
+  ok("wander speed is enabled in wander mode");
+else fail("wander speed should be enabled in wander mode");
+await page.waitForTimeout(700);
+const wanderMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(4500);
+const wandering = await passesSince(wanderMark);
+const wanderSteps = offsetSteps(wandering);
+if (
+  wandering.length >= 6 &&
+  Math.max(...wanderSteps) <= 0.051 &&
+  Math.max(...wanderSteps) > 1e-4
+) {
+  ok(
+    `wander drifts: ${wandering.length} passes, no start moved more than ${Math.max(...wanderSteps).toFixed(3)} s (limit 0.05 s) but they do move`,
+  );
+} else {
+  fail(
+    `bad wander passes: steps ${wanderSteps.map((v) => v.toFixed(3)).join(" ")}`,
+  );
+}
+
+// Speed 0 holds the start still. Give passes already queued under the old
+// speed time to play out first.
+await setSlider("wander-speed", 0);
+await page.waitForTimeout(2500);
+const holdMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(3500);
+const held = await passesSince(holdMark);
+const heldOffsets = held.map((pass) => pass.offset);
+if (
+  held.length >= 4 &&
+  Math.max(...heldOffsets) - Math.min(...heldOffsets) < 1e-9
+) {
+  ok(
+    `speed 0 holds the start still (${held.length} passes, all at ${heldOffsets[0].toFixed(3)} s)`,
+  );
+} else {
+  fail(
+    `speed 0 should hold the start: ${heldOffsets.map((v) => v.toFixed(3)).join(" ")}`,
+  );
+}
+
+// And random mode still jumps: independent uniform starts over a 0.5 s
+// range move by more than 0.06 s between some pair of passes.
+await page.selectOption("#start-mode", "random");
+if (await page.isDisabled("#wander-speed"))
+  ok("wander speed is disabled again in random mode");
+else fail("wander speed should be disabled again in random mode");
+await page.waitForTimeout(700);
+const randomMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(4500);
+const jumping = await passesSince(randomMark);
+const jumpSteps = offsetSteps(jumping);
+if (jumping.length >= 6 && Math.max(...jumpSteps) > 0.06) {
+  ok(
+    `random mode still jumps (largest step ${Math.max(...jumpSteps).toFixed(3)} s)`,
+  );
+} else {
+  fail(
+    `random mode should jump: steps ${jumpSteps.map((v) => v.toFixed(3)).join(" ")}`,
+  );
+}
+
+// --- Rests. Pure first: a rest is `chance < probability` of a uniformly
+// random time up to the max.
+const restMath = await page.evaluate(async () => {
+  const { planRest } = await import("/src/passMath.ts");
+  return {
+    never: planRest(0, 2, 0, 0.5),
+    always: planRest(1, 2, 0.999, 0.5),
+    longest: planRest(0.3, 2, 0.29, 1),
+    missed: planRest(0.3, 2, 0.31, 1),
+    noMax: planRest(1, 0, 0, 0.5),
+  };
+});
+if (
+  near(restMath.never, 0) &&
+  near(restMath.always, 1) &&
+  near(restMath.longest, 2) &&
+  near(restMath.missed, 0) &&
+  near(restMath.noMax, 0)
+) {
+  ok("rest planning: probability gates it, duration is uniform up to the max");
+} else {
+  fail(`bad rest math: ${JSON.stringify(restMath)}`);
+}
+
+// Then what the app schedules, on the 1 s tone at window 0.5. The gap
+// between one pass ending and the next starting is the rest; a crossfaded
+// pass overlaps the previous one, so its gap is negative.
+const gapsOf = (list) =>
+  list.slice(1).map((pass, i) => pass.when - (list[i].when + list[i].duration));
+
+await setSlider("rest-probability", 1);
+await setSlider("rest-duration", 2000);
+await page.waitForTimeout(800);
+const allRestMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(8000);
+const allRests = await passesSince(allRestMark);
+const allRestGaps = gapsOf(allRests);
+if (
+  allRests.length >= 5 &&
+  allRestGaps.every((gap) => gap >= -1e-6 && gap <= 2.001) &&
+  Math.max(...allRestGaps) > 0.15
+) {
+  ok(
+    `rest probability 1: every pass is followed by a rest (${allRestGaps.map((g) => g.toFixed(2)).join(", ")} s, max 2)`,
+  );
+} else {
+  fail(
+    `bad rests at probability 1: ${allRestGaps.map((g) => g.toFixed(3)).join(" ")}`,
+  );
+}
+
+await setSlider("rest-probability", 0.5);
+await setSlider("rest-duration", 400);
+await page.waitForTimeout(800);
+const halfRestMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(7000);
+const halfRests = await passesSince(halfRestMark);
+const halfRestGaps = gapsOf(halfRests);
+if (
+  halfRests.length >= 10 &&
+  halfRestGaps.some((gap) => gap < -0.01) &&
+  halfRestGaps.some((gap) => gap > 0.01) &&
+  halfRestGaps.every((gap) => gap <= 0.401)
+) {
+  ok(
+    `rest probability 0.5: ${halfRestGaps.filter((g) => g > 0.01).length} of ${halfRestGaps.length} passes followed by a rest, the rest crossfaded, none over 0.4 s`,
+  );
+} else {
+  fail(
+    `bad rests at probability 0.5: ${halfRestGaps.map((g) => g.toFixed(3)).join(" ")}`,
+  );
+}
+
+await setSlider("rest-probability", 0);
+await page.waitForTimeout(800);
+const noRestMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(3000);
+const noRests = await passesSince(noRestMark);
+if (noRests.length >= 4 && gapsOf(noRests).every((gap) => gap < 0)) {
+  ok("rest probability 0: back to crossfaded passes with no gaps");
+} else {
+  fail(
+    `rests should be off: ${gapsOf(noRests)
+      .map((g) => g.toFixed(3))
+      .join(" ")}`,
+  );
+}
+
+// At window 1 a native loop has no end-of-loop to rest after, so rests
+// turn it into full-length passes; rests off returns it to a native loop.
+await setSlider("sample-window", 1);
+await setSlider("rest-probability", 1);
+await setSlider("rest-duration", 300);
+await page.waitForTimeout(1000);
+const fullMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(4500);
+const fullPasses = await passesSince(fullMark);
+if (
+  fullPasses.length >= 3 &&
+  fullPasses.every((pass) => near(pass.offset, 0) && near(pass.duration, 1))
+) {
+  ok(
+    `window 1 with rests plays ${fullPasses.length} full-length passes, resting between`,
+  );
+} else {
+  fail(
+    `window 1 with rests should chain full passes: ${JSON.stringify(fullPasses)}`,
+  );
+}
+await setSlider("rest-probability", 0);
+await page.waitForTimeout(1000);
+const backToLoopMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(2500);
+const backToLoop = await page.evaluate(
+  (from) => ({
+    newStarts: window.__starts.length - from,
+    lastIsLoop: window.__starts.at(-1).loop,
+  }),
+  backToLoopMark,
+);
+if (backToLoop.newStarts === 0 && backToLoop.lastIsLoop) {
+  ok("window 1 with rests off is a native loop again");
+} else {
+  fail(`should be a native loop again: ${JSON.stringify(backToLoop)}`);
+}
+
 rmSync(toneDir, { recursive: true, force: true });
 
 if (errors.length > 0) fail(`console/page errors:\n  ${errors.join("\n  ")}`);
