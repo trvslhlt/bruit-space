@@ -49,9 +49,13 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
 
 ## Making objects differ from each other
 
-- **Per-file loudness normalization** at load. The samples sit at very
-  different levels and the random 0.3-0.8 object gain doesn't correct for it.
-  Probably the biggest practical win on this list.
+- ~~**Per-file loudness normalization** at load. The samples sit at very
+  different levels and the random 0.3-0.8 object gain doesn't correct for
+  it.~~ Done: each object's own RMS is corrected toward a target level (see
+  `loudness.ts`), independent of the Loudness slider. A proper LUFS-style
+  measurement, a user-facing target-level control, and per-object display of
+  the correction applied are still open if the simple RMS approach isn't
+  good enough by ear.
 - **Per-object scatter** around the global values: closed cutoff (a trunk
   muffles harder than a box), sample window, reverb wet.
 - **Filename-prefix roles.** The sample library's prefixes are semantic
@@ -84,10 +88,14 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
 - **Hidden-tab scheduling** is untested (see SPEC.md). If it matters,
   scheduling from a Worker timer would avoid main-thread timer throttling.
 - **Promote to bruit-kit?** `PassPlayer` and `planPass` are generic enough
-  to move into bruit-kit's `sources` once their shape settles.
+  to move into bruit-kit's `sources` once their shape settles. `loudness.ts`
+  (RMS + normalizationGain) is equally generic -- no coupling to the room or
+  spatial engine -- and could move too.
 - **Stale doc comment in bruit-kit.** `distanceGain`'s comment describes using
   exponent 1 for a reverb send, which bruit-space no longer does (it splits a
   wet fraction instead).
 - **Listening checks still owed:** HRTF front/back quality over headphones,
-  the default master level (0.9) with loud samples, and the closed-cutoff
-  transition (200 Hz, 700 ms).
+  the default master level (0.9) with loud samples, the closed-cutoff
+  transition (300 Hz, 700 ms), and now loudness normalization -- it can
+  raise a quiet object's level up to 4x (+12 dB), which combined with the
+  existing master-level concern is more headroom pressure to listen for.

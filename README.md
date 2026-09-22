@@ -40,7 +40,12 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   folder is randomly subsampled. Changing it, or **Reshuffle**, re-picks
   and re-places.
 - **Walk:** `W`/`A`/`S`/`D` move relative to where you're facing;
-  `Q`/`E` turn. They combine, so `W`+`E` walks in a curve.
+  `Q`/`E` turn. They combine, so `W`+`E` walks in a curve. **Walk speed
+  (m/s)** and **Turn speed (deg/s)**, in the Listener panel, set how fast —
+  mouse dragging is a direct 1:1 pointer move and isn't affected by either.
+- **Hearing range** (Listener panel, default 8) is the distance at which
+  every object falls to silence (dashed ring on the map). One curve for all
+  objects — a louder object is simply still audible from farther away.
 - **Mouse:** drag the ▲ to move the listener, drag the dot in front of it
   to turn. Drag any sound object to move it. Each object has its own
   loudness slider and mute in the Objects list.
@@ -51,7 +56,7 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   **Transition** under "Closed objects" apply to every object. Dragging an
   object moves it without toggling it.
 - **Start mode** picks where each pass starts within the room the window
-  leaves. **Random** (default) picks independently every pass. **Wander**
+  leaves. **Random** picks independently every pass. **Wander** (default)
   keeps a slowly moving start position: each pass it glides toward a random
   target and picks a new target on arrival, so successive passes overlap
   and the loop evolves instead of jumping. **Wander speed** sets how far it
@@ -60,21 +65,24 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   passes evolve more slowly in real time. At window 1 there is no room to
   move, so neither mode has any effect.
 - **Rests:** after each pass there's a chance (**Rest probability**, default
-  0 = off) of a rest, which is real silence lasting a random time up to
-  **Rest max (ms)**. With no rest the next pass crossfades in as before; with
+  0.1) of a rest, which is real silence lasting a random time up to
+  **Rest max (ms)** (default 650). With no rest the next pass crossfades in as before; with
   one, the pass fades out, the rest passes, and the next fades in. At window 1
   a plain loop has no end-of-loop to rest after, so turning rests on makes it
   a chain of full-length passes (turn them off and it's a native loop again).
-- **Sample window** (Playback panel, default 1) is the share of each sample
+- **Sample window** (Playback panel, default 0.3) is the share of each sample
   played per pass. At 0.9 each pass plays 90% of the sample from a random
   start between 0% and 10% of the way in, then the next pass begins,
   crossfaded; lower windows give shorter, more varied fragments. At 1 the
   sample simply loops. It's a pure proportion of each sample's own length,
   so the same setting gives a short fragment of a short sample and a long
   one of a long sample.
-- **Hearing range** is the distance at which every object falls to
-  silence (dashed ring on the map). One curve for all objects — a louder
-  object is simply still audible from farther away.
+- **Loudness normalization** happens automatically at load: each sample's own
+  level is corrected toward a common target before the Loudness slider or
+  distance are applied, so a quietly-recorded file and a loud one don't
+  differ by their raw recording level. It can boost a very quiet file up to
+  4x (+12 dB); there's no control for it, so a folder of especially quiet
+  recordings can push the master level harder than before.
 - **Master** sets the overall level (default 0.9). Loud samples with
   several audible at once can push a recording to full scale; lower it if
   the shared limiter starts audibly pumping.

@@ -6,6 +6,7 @@ import {
   preloadPcmRecorderWorklet,
 } from "bruit-kit/audio";
 import { connectToOutput, getSharedLimiter } from "./audioContext";
+import { normalizationGainForBuffer } from "./loudness";
 import type { StartMode } from "./passMath";
 import { type PassConfig, PassPlayer } from "./passPlayer";
 import { type RoomState, reverbWetFraction } from "./room";
@@ -25,20 +26,20 @@ const ROLLOFF_EXPONENT = 2;
 const SMOOTHING_SECONDS = 0.03;
 
 export const DEFAULT_MASTER_LEVEL = 0.9;
-export const DEFAULT_WET_NEAR = 0.2;
-export const DEFAULT_WET_FAR = 0.8;
-export const DEFAULT_SAMPLE_WINDOW = 1;
-export const DEFAULT_START_MODE: StartMode = "random";
+export const DEFAULT_WET_NEAR = 0.1;
+export const DEFAULT_WET_FAR = 1;
+export const DEFAULT_SAMPLE_WINDOW = 0.3;
+export const DEFAULT_START_MODE: StartMode = "wander";
 export const DEFAULT_WANDER_SPEED = 0.5;
-export const DEFAULT_REST_PROBABILITY = 0;
-export const DEFAULT_REST_MAX_MS = 1500;
+export const DEFAULT_REST_PROBABILITY = 0.1;
+export const DEFAULT_REST_MAX_MS = 650;
 
 const SCHEDULE_INTERVAL_MS = 250;
 // A slider drag fires many input events; each window or start-mode change
 // re-rolls every object's passes, so wait for it to settle rather than
 // restarting them at every intermediate value.
 const PLAYBACK_DEBOUNCE_MS = 120;
-export const DEFAULT_CLOSED_CUTOFF_HZ = 200;
+export const DEFAULT_CLOSED_CUTOFF_HZ = 300;
 export const DEFAULT_TRANSITION_MS = 700;
 
 // Retargeting an already-closed object's cutoff while its slider is being
@@ -52,6 +53,11 @@ interface Voice {
   gain: GainNode;
   send: GainNode;
   panner: PannerNode;
+  /** Per-file loudness correction -- see loudness.ts -- folded into
+   * `total` alongside the object's own Loudness slider, so a quiet
+   * recording and a loud one placed at the same distance come out at a
+   * similar level. */
+  normalizationGain: number;
 }
 
 export class SpatialEngine {
@@ -228,7 +234,16 @@ export class SpatialEngine {
       filter,
       this.playback,
     );
-    this.voices.set(id, { player, filter, closed, gain, send, panner });
+    const normalizationGain = normalizationGainForBuffer(buffer);
+    this.voices.set(id, {
+      player,
+      filter,
+      closed,
+      gain,
+      send,
+      panner,
+      normalizationGain,
+    });
   }
 
   clearObjects(): void {
@@ -265,7 +280,9 @@ export class SpatialEngine {
       const distance = Math.hypot(object.x - listener.x, object.y - listener.y);
       const level = object.muted ? 0 : object.gain;
       const total =
-        level * distanceGain(distance, room.hearingRange, ROLLOFF_EXPONENT);
+        level *
+        voice.normalizationGain *
+        distanceGain(distance, room.hearingRange, ROLLOFF_EXPONENT);
       const wet = reverbWetFraction(
         distance,
         room.hearingRange,

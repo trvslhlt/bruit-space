@@ -31,8 +31,11 @@ export interface RoomState {
   selectedId: number | null;
 }
 
-export const LISTENER_SPEED = 2; // metres/second
-export const LISTENER_TURN_RATE = Math.PI / 2; // radians/second
+// Defaults for the Listener panel's Walk speed / Turn speed sliders --
+// actual movement in main.ts's frame loop uses whatever those sliders are
+// currently set to, not these directly.
+export const DEFAULT_LISTENER_SPEED = 2; // metres/second
+export const DEFAULT_LISTENER_TURN_RATE = Math.PI / 2; // radians/second
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);

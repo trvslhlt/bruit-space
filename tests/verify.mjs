@@ -33,12 +33,20 @@ function ok(message) {
   console.log(`ok: ${message}`);
 }
 
-function sineSamples(frequency, seconds = 1) {
+function sineSamples(frequency, seconds = 1, amplitude = 0.5) {
   const count = Math.floor(SAMPLE_RATE * seconds);
   return Array.from(
     { length: count },
-    (_, i) => 0.5 * Math.sin((2 * Math.PI * frequency * i) / SAMPLE_RATE),
+    (_, i) => amplitude * Math.sin((2 * Math.PI * frequency * i) / SAMPLE_RATE),
   );
+}
+
+// Independent of loudness.ts's own rmsOf, so the integration test below
+// checks the app's wiring against a value computed a different way, not
+// just against itself.
+function rmsOfSamples(samples) {
+  const sumSquares = samples.reduce((sum, s) => sum + s * s, 0);
+  return Math.sqrt(sumSquares / samples.length);
 }
 
 function wavFile(samples) {
@@ -203,6 +211,43 @@ if ((await page.locator(".unlock-button").count()) > 0) {
 await page.waitForSelector("#app:not([hidden])");
 ok("page loads and audio unlocks");
 
+// The shipped defaults, read straight off the controls. Other checks below
+// set what they depend on explicitly, so changing a default only ever needs
+// this table updated.
+const expectedDefaults = {
+  "#room-width": "20",
+  "#room-height": "20",
+  "#hearing-range": "8",
+  "#walk-speed": "2",
+  "#turn-speed": "90",
+  "#reverb-decay": "2",
+  "#reverb-predelay": "20",
+  "#reverb-damping": "6000",
+  "#reverb-wet-near": "0.1",
+  "#reverb-wet-far": "1",
+  "#closed-cutoff": "300",
+  "#closed-transition": "700",
+  "#sample-window": "0.3",
+  "#start-mode": "wander",
+  "#wander-speed": "0.5",
+  "#rest-probability": "0.1",
+  "#rest-duration": "650",
+  "#master-level": "0.9",
+};
+const wrongDefaults = [];
+for (const [selector, expected] of Object.entries(expectedDefaults)) {
+  const actual = await page.inputValue(selector);
+  if (Number(actual) !== Number(expected) && actual !== expected) {
+    wrongDefaults.push(`${selector}: ${actual} (expected ${expected})`);
+  }
+}
+if (wrongDefaults.length === 0)
+  ok("every control starts at its intended default");
+else fail(`unexpected defaults: ${wrongDefaults.join("; ")}`);
+if (!(await page.isDisabled("#wander-speed")))
+  ok("wander speed is enabled in the default wander mode");
+else fail("wander speed should be enabled by default");
+
 await page.setInputFiles("#folder-input", sampleDir);
 await waitForStatus(/^15 of 21 files placed/);
 if ((await page.locator("#object-list li").count()) === 15) {
@@ -307,6 +352,53 @@ if ((await rowButton(target.id).textContent()) === "open") {
 }
 await rowButton(target.id).click();
 
+// Speed sliders scale keyboard movement. Heading is still exactly 0 here
+// (nothing has turned the listener yet), so a strafe moves along x alone --
+// no room-edge clamping risk regardless of speed, unlike after the turn
+// test below changes heading.
+const beforeFastWalk = await readListener();
+await setSlider("walk-speed", 6);
+await hold("d", 600);
+const afterFastWalk = await readListener();
+const fastWalkDistance = afterFastWalk.x - beforeFastWalk.x;
+await hold("a", 600); // undo the strafe -- "a" is exactly d's opposite
+await setSlider("walk-speed", 2); // back to default for the tests below
+if (fastWalkDistance > 2.5) {
+  ok(
+    `Walk speed slider raises movement (6 m/s strafe moved ${fastWalkDistance.toFixed(2)} m in 0.6 s, default 2 m/s gives ~1.2 m)`,
+  );
+} else {
+  fail(`walk speed slider should speed up movement, got ${fastWalkDistance} m`);
+}
+
+const beforeFastTurn = await readListener();
+await setSlider("turn-speed", 270);
+await hold("e", 500);
+const afterFastTurn = await readListener();
+const fastTurnDelta = afterFastTurn.heading - beforeFastTurn.heading;
+await hold("q", 500); // undo the turn -- "q" is exactly e's opposite
+await setSlider("turn-speed", 90); // back to default
+if (fastTurnDelta > 100 && fastTurnDelta < 160) {
+  ok(
+    `Turn speed slider raises turn rate (270°/s turned ${fastTurnDelta}° in 0.5 s, default 90°/s gives ~45°)`,
+  );
+} else {
+  fail(`turn speed slider should speed up turning, got ${fastTurnDelta}°`);
+}
+// Both undone: confirm rather than assume, since anything below that
+// expects a specific x/heading depends on this having actually worked.
+const restored = await readListener();
+if (
+  Math.abs(restored.x - beforeFastWalk.x) < 0.1 &&
+  (restored.heading < 10 || restored.heading > 350)
+) {
+  ok("speed-test movement was fully undone before the fixed-speed tests below");
+} else {
+  fail(
+    `speed-test undo left state behind: x ${beforeFastWalk.x} -> ${restored.x}, heading -> ${restored.heading}°`,
+  );
+}
+
 const start = await readListener();
 await hold("d", 600);
 const afterStrafe = await readListener();
@@ -410,11 +502,17 @@ const toneDir = path.join(os.tmpdir(), "bruit-space-verify-tone");
 rmSync(toneDir, { recursive: true, force: true });
 mkdirSync(toneDir, { recursive: true });
 writeFileSync(path.join(toneDir, "bright.wav"), wavFile(sineSamples(3000)));
+// Window 1 with no rests is a native loop, so the tone's player creates
+// exactly one gain (its bus). Under the shipped defaults it would be a
+// chain of passes creating a varying number, which the gain lookup below
+// can't count on.
+await setSlider("sample-window", 1);
+await setSlider("rest-probability", 0);
 await page.setInputFiles("#folder-input", toneDir);
 await waitForStatus(/^1 of 1 files placed/);
 // The tone object's direct and send gains are the two gains created just
-// before its player's bus (window is still at its default of 1 here, so the
-// player has made exactly one gain). Later passes create more, which is why
+// before its player's bus (window 1, so the player has made exactly one
+// gain). Later passes create more, which is why
 // this is captured now rather than counted from the end later.
 const toneGainIndex = (await page.evaluate(() => window.__gains.length)) - 3;
 await setSlider("hearing-range", 40);
@@ -543,7 +641,14 @@ if (Math.abs(q - -3.0103) < 0.01) {
 // --- The reverb share of an object's sound follows the near/far settings,
 // interpolated linearly with distance. Read straight off the voice's two
 // gains: direct = total * (1 - wet), send = total * wet, with total on the
-// shared (1 - d/range)^2 curve.
+// shared (1 - d/range)^2 curve times bright.wav's own normalization gain
+// (every object's total now includes per-file loudness correction -- see
+// the loudness normalization tests below -- so this scene's expected total
+// has to account for it too, not just distance).
+const brightToneNormGain = Math.min(
+  4,
+  Math.max(0.1, 0.1 / (0.5 / Math.sqrt(2))),
+);
 await setSlider("hearing-range", 40);
 await page.click(`.object-row[data-id="${toneId}"] .object-name`);
 async function voiceMix() {
@@ -570,7 +675,7 @@ for (const [near, far] of [
   const t = distance / 40;
   const expectedWet = near + (far - near) * t;
   const wet = send / (direct + send);
-  const totalRatio = (direct + send) / (1 - t) ** 2;
+  const totalRatio = (direct + send) / ((1 - t) ** 2 * brightToneNormGain);
   if (Math.abs(wet - expectedWet) < 0.03 && Math.abs(totalRatio - 1) < 0.03) {
     ok(
       `wet fraction ${wet.toFixed(2)} at ${distance} m with near ${near} / far ${far} (expected ${expectedWet.toFixed(2)})`,
@@ -617,6 +722,10 @@ if (
 // the sweep test; open it so the continuity check can hear it.
 await rowButton(toneId).click();
 await page.waitForTimeout(2000);
+// Rests off and random starts, whatever the defaults are, so the overlap
+// and distinct-start checks below mean what they say.
+await setSlider("rest-probability", 0);
+await page.selectOption("#start-mode", "random");
 const startsBefore = await page.evaluate(() => window.__starts.length);
 await setSlider("sample-window", 0.5);
 await page.waitForTimeout(3500);
@@ -852,8 +961,11 @@ if (
 const gapsOf = (list) =>
   list.slice(1).map((pass, i) => pass.when - (list[i].when + list[i].duration));
 
+// Max 800 ms, not longer: passes are recorded as they're scheduled, so the
+// count in a fixed window depends on the average pass-plus-rest time, and a
+// 2 s max leaves it borderline (4 or 5) for the >= 5 check below.
 await setSlider("rest-probability", 1);
-await setSlider("rest-duration", 2000);
+await setSlider("rest-duration", 800);
 await page.waitForTimeout(800);
 const allRestMark = await page.evaluate(() => window.__starts.length);
 await page.waitForTimeout(8000);
@@ -861,11 +973,11 @@ const allRests = await passesSince(allRestMark);
 const allRestGaps = gapsOf(allRests);
 if (
   allRests.length >= 5 &&
-  allRestGaps.every((gap) => gap >= -1e-6 && gap <= 2.001) &&
+  allRestGaps.every((gap) => gap >= -1e-6 && gap <= 0.801) &&
   Math.max(...allRestGaps) > 0.15
 ) {
   ok(
-    `rest probability 1: every pass is followed by a rest (${allRestGaps.map((g) => g.toFixed(2)).join(", ")} s, max 2)`,
+    `rest probability 1: every pass is followed by a rest (${allRestGaps.map((g) => g.toFixed(2)).join(", ")} s, max 0.8)`,
   );
 } else {
   fail(
@@ -949,6 +1061,145 @@ if (backToLoop.newStarts === 0 && backToLoop.lastIsLoop) {
 }
 
 rmSync(toneDir, { recursive: true, force: true });
+
+// --- Per-file loudness normalization. Pure math first, exact values.
+const loudness = await page.evaluate(async () => {
+  const {
+    rmsOf,
+    normalizationGain,
+    TARGET_RMS,
+    MIN_NORMALIZATION_GAIN,
+    MAX_NORMALIZATION_GAIN,
+  } = await import("/src/loudness.ts");
+  return {
+    rmsFlat: rmsOf([new Float32Array([1, -1, 1, -1])]),
+    rmsEmpty: rmsOf([]),
+    atTarget: normalizationGain(TARGET_RMS),
+    nearSilent: normalizationGain(1e-9),
+    maxGain: MAX_NORMALIZATION_GAIN,
+    // Only reachable with a non-default target -- see loudness.ts -- so
+    // exercised that way here rather than with real audio.
+    hypotheticalLoud: normalizationGain(2, 0.1),
+    minGain: MIN_NORMALIZATION_GAIN,
+  };
+});
+if (
+  near(loudness.rmsFlat, 1) &&
+  near(loudness.rmsEmpty, 0) &&
+  near(loudness.atTarget, 1) &&
+  near(loudness.nearSilent, loudness.maxGain) &&
+  near(loudness.hypotheticalLoud, loudness.minGain)
+) {
+  ok(
+    "loudness math: RMS is exact, normalizing to the target is a no-op at the target, both clamps hold",
+  );
+} else {
+  fail(`bad loudness math: ${JSON.stringify(loudness)}`);
+}
+
+// Then the actual wiring: a quiet and a loud tone, each loaded alone, read
+// off the real direct-gain node -- same approach as the wet-fraction test.
+async function loadSoloTone(amplitude) {
+  const dir = path.join(
+    os.tmpdir(),
+    `bruit-space-verify-loudness-${amplitude}`,
+  );
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const samples = sineSamples(1000, 1, amplitude);
+  writeFileSync(path.join(dir, "tone.wav"), wavFile(samples));
+  // Window 1, no rests: exactly one addObject call, so the player's bus is
+  // the one gain created after this object's direct/send pair (see the
+  // closing-sweep scene above, same trick).
+  await setSlider("sample-window", 1);
+  await setSlider("rest-probability", 0);
+  await page.setInputFiles("#folder-input", dir);
+  await waitForStatus(/^1 of 1 files placed/);
+  const gainIndex = (await page.evaluate(() => window.__gains.length)) - 3;
+  const id = (await canvasObjects())[0].id;
+  await page
+    .locator(`.object-row[data-id="${id}"] input[type="range"]`)
+    .evaluate((el) => {
+      el.value = "1";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  await rowButton(id).click(); // starts closed; open it so nothing is filtered
+  await page.click(`.object-row[data-id="${id}"] .object-name`); // for #selected-readout
+  await setSlider("reverb-wet-near", 0);
+  await setSlider("reverb-wet-far", 0);
+  await setSlider("hearing-range", 40);
+  await page.waitForTimeout(400);
+  const distance = Number(
+    (await page.textContent("#selected-readout")).match(/([\d.]+) m away/)[1],
+  );
+  const directGain = await page.evaluate(
+    (index) => window.__gains[index].gain.value,
+    gainIndex,
+  );
+  rmSync(dir, { recursive: true, force: true });
+  // Isolates the measured normalization gain: directGain = 1 (slider) *
+  // normGain * (1 - distance/range)^2 (ROLLOFF_EXPONENT 2, wet 0).
+  const measuredNormGain = directGain / (1 - distance / 40) ** 2;
+  const rms = rmsOfSamples(samples);
+  // TARGET_RMS / rms, clamped the same way loudness.ts's normalizationGain
+  // does -- matters for the quiet tone below, where the raw ratio exceeds
+  // the +12 dB ceiling.
+  const expectedNormGain = Math.min(4, Math.max(0.1, 0.1 / rms));
+  return { measuredNormGain, expectedNormGain, rms };
+}
+
+const quiet = await loadSoloTone(0.02);
+const loud = await loadSoloTone(0.9);
+if (
+  Math.abs(quiet.measuredNormGain - quiet.expectedNormGain) /
+    quiet.expectedNormGain <
+    0.03 &&
+  Math.abs(loud.measuredNormGain - loud.expectedNormGain) /
+    loud.expectedNormGain <
+    0.03
+) {
+  ok(
+    `normalization is wired in: quiet tone measured ${quiet.measuredNormGain.toFixed(2)}x (expected ${quiet.expectedNormGain.toFixed(2)}x), loud tone ${loud.measuredNormGain.toFixed(2)}x (expected ${loud.expectedNormGain.toFixed(2)}x)`,
+  );
+} else {
+  fail(
+    `normalization gain off: quiet measured ${quiet.measuredNormGain}, expected ${quiet.expectedNormGain}; loud measured ${loud.measuredNormGain}, expected ${loud.expectedNormGain}`,
+  );
+}
+// A looser, relative tolerance than near()'s: the smoothed gain settles
+// asymptotically (setTargetAtTime), so it's very close to but not bit-exact
+// at 4 after a fixed wait.
+if (Math.abs(quiet.measuredNormGain - 4) / 4 < 0.01) {
+  ok(
+    `the very quiet tone hits the +12 dB boost ceiling (${quiet.measuredNormGain.toFixed(3)}x)`,
+  );
+} else {
+  fail(
+    `expected the quiet tone to clamp at 4x, measured ${quiet.measuredNormGain}`,
+  );
+}
+// The actual point of normalization: after correction, both tones should
+// sound close to the same level, even though their raw amplitudes differ
+// 45x (0.9 / 0.02). The loud tone lands exactly on target (its correction
+// isn't clamped); the quiet one is clamped short of the target but still
+// much closer to it than its raw level was.
+const TARGET_RMS = 0.1;
+const loudEffective = loud.rms * loud.measuredNormGain;
+const quietEffective = quiet.rms * quiet.measuredNormGain;
+const quietRawGapFromTarget = Math.abs(TARGET_RMS - quiet.rms);
+const quietCorrectedGapFromTarget = Math.abs(TARGET_RMS - quietEffective);
+if (
+  near(loudEffective, TARGET_RMS) &&
+  quietCorrectedGapFromTarget < quietRawGapFromTarget * 0.75
+) {
+  ok(
+    `normalized level converges toward the target: loud tone lands at ${loudEffective.toFixed(3)} (target ${TARGET_RMS}), quiet tone moves from ${quiet.rms.toFixed(4)} to ${quietEffective.toFixed(4)}`,
+  );
+} else {
+  fail(
+    `normalization should bring both tones toward ${TARGET_RMS}: loud effective ${loudEffective}, quiet raw ${quiet.rms} -> corrected ${quietEffective}`,
+  );
+}
 
 if (errors.length > 0) fail(`console/page errors:\n  ${errors.join("\n  ")}`);
 else ok("no console or page errors");

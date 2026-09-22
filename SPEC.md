@@ -25,13 +25,14 @@ components are a bonus, and should land in `bruit-kit`.
 | Input | `<input webkitdirectory>`; `.wav` / `.mp3` via `decodeAudioData`; `.aif`/`.aiff` via a hand-written parser (`decodeAiff` in bruit-kit), so no conversion step. The real sample folder is 57 files of 24-bit big-endian AIFF |
 | Object cap | Configurable, default 15. A larger folder is randomly subsampled; a "reshuffle" re-picks and re-places |
 | Placement | Random on load, then drag to adjust |
-| Playback | One global **sample window** (0.05–1, default 1) sets what share of each sample plays per pass. A pass plays `window × the sample's length` from a start chosen uniformly at random in `[0, 1 − window]` of the sample, so it never runs past the end (higher window = longer pass, less randomness); the next pass then starts, equal-power crossfaded (30 ms). It's a pure proportion: no min/max seconds clamp (considered and rejected, see FUTURE.md) beyond a 50 ms floor so a tiny window on a very short sample can't ask for a zero-length fragment. Window 1 is a plain native loop from a random start offset, exactly the earlier behaviour. **Start mode** chooses where in `[0, 1 − window]` each pass starts: `random` (independent every pass) or `wander` (each object keeps a start position and a random target, both as fractions of that range; every pass the position glides toward the target by `0.4 × speed²` of the remaining distance, and a new random target is picked once it is within 0.05 of it). Wander speed 0 holds the start still. Speed is per pass, not per second, and the wander state persists when the window changes. **Rests**: after each pass, with a global probability (default 0), the player stays silent for a uniformly random time up to a global maximum (default 1500 ms) before the next pass; a rest means no crossfade overlap (the pass fades out completely, the next fades in after). Window 1 with rests on becomes a chain of full-length passes, since a native loop has no end-of-loop to rest after |
-| Listener | Position + heading; starts at the bottom edge facing up. Mouse: drag the body to move, drag a nose handle to rotate. Keyboard: WASD walks *relative to facing* (W forward, A/D strafe), Q/E rotate, all usable simultaneously |
+| Playback | One global **sample window** (0.05–1, default 0.3) sets what share of each sample plays per pass. A pass plays `window × the sample's length` from a start chosen uniformly at random in `[0, 1 − window]` of the sample, so it never runs past the end (higher window = longer pass, less randomness); the next pass then starts, equal-power crossfaded (30 ms). It's a pure proportion: no min/max seconds clamp (considered and rejected, see FUTURE.md) beyond a 50 ms floor so a tiny window on a very short sample can't ask for a zero-length fragment. Window 1 is a plain native loop from a random start offset, exactly the earlier behaviour. **Start mode** (default `wander`) chooses where in `[0, 1 − window]` each pass starts: `random` (independent every pass) or `wander` (each object keeps a start position and a random target, both as fractions of that range; every pass the position glides toward the target by `0.4 × speed²` of the remaining distance, and a new random target is picked once it is within 0.05 of it). Wander speed (default 0.5; 0 holds the start still). Speed is per pass, not per second, and the wander state persists when the window changes. **Rests**: after each pass, with a global probability (default 0.1), the player stays silent for a uniformly random time up to a global maximum (default 650 ms) before the next pass; a rest means no crossfade overlap (the pass fades out completely, the next fades in after). Window 1 with rests on becomes a chain of full-length passes, since a native loop has no end-of-loop to rest after |
+| Listener | Position + heading; starts at the bottom edge facing up. Mouse: drag the body to move, drag a nose handle to rotate — a direct 1:1 pointer move, no speed concept. Keyboard: WASD walks *relative to facing* (W forward, A/D strafe), Q/E rotate, all usable simultaneously. **Walk speed** (m/s, default 2) and **turn speed** (deg/s, default 90) are Listener-panel sliders scaling that keyboard movement; both, and **hearing range** (below), live there rather than on the Room panel since they describe the listener's own perception and movement, not the room's geometry |
 | Spatialization | HRTF `PannerNode` (front/back EQ and head shadow come from the HRTF itself — no custom filter). Headphones assumed |
-| Distance | One attenuation curve shared by all objects, reaching silence at a max distance. Per-object gain sets how loud each object is, so louder objects are audible from farther away |
-| Reverb | One global reverb, listener-independent. Room size maps to decay/pre-delay/damping, not geometry. Each object's *wet fraction* (share of its sound that is reverb vs direct) is interpolated linearly from a "wet at object" setting (listener on top of it, default 0.2) to a "wet at range edge" setting (default 0.8). Direct = total × (1 − wet), send = total × wet, where total follows the shared distance curve, so both fade to silence together at the hearing range |
+| Distance | One attenuation curve shared by all objects, reaching silence at the listener's hearing range (m, default 8, Listener panel). Per-object gain sets how loud each object is, so louder objects are audible from farther away |
+| Loudness | Each object's raw RMS level is corrected toward a target (`loudness.ts`, `TARGET_RMS` linear 0.1, roughly −20 dBFS) before anything else is applied, so a quietly-recorded file and a loud one placed at the same distance come out similar. Automatic, not user-facing; independent of and multiplied together with the per-object Loudness slider. Clamped to ±12 dB / −20 dB (`MAX_NORMALIZATION_GAIN` 4, `MIN_NORMALIZATION_GAIN` 0.1) so a near-silent recording isn't boosted into audible noise — the cut side is effectively unreachable for real audio at this target, since a full-scale signal's RMS never exceeds 1 |
+| Reverb | One global reverb, listener-independent. Room size maps to decay/pre-delay/damping, not geometry. Each object's *wet fraction* (share of its sound that is reverb vs direct) is interpolated linearly from a "wet at object" setting (listener on top of it, default 0.1) to a "wet at range edge" setting (default 1). Direct = total × (1 − wet), send = total × wet, where total follows the shared distance curve, so both fade to silence together at the hearing range |
 | Recording | Lossless PCM capture of the master output, written directly to `.wav`. Not `MediaRecorder` (see below) |
-| Object state | Each object is open (the plain sound) or closed (muffled), and every object starts closed. Click it on the map to toggle; a drag moves it without toggling. Closed = a lowpass whose cutoff (default 200 Hz) and sweep time (default 700 ms) are global settings. The sweep is exponential in frequency, from Nyquist (an identity filter, so open is truly unfiltered) down to the cutoff, and can be reversed mid-sweep. The filter sits before both the dry path and the reverb send, so a closed object's reverb is muffled too |
+| Object state | Each object is open (the plain sound) or closed (muffled), and every object starts closed. Click it on the map to toggle; a drag moves it without toggling. Closed = a lowpass whose cutoff (default 300 Hz) and sweep time (default 700 ms) are global settings. The sweep is exponential in frequency, from Nyquist (an identity filter, so open is truly unfiltered) down to the cutoff, and can be reversed mid-sweep. The filter sits before both the dry path and the reverb send, so a closed object's reverb is muffled too |
 | Visuals | Minimal technical map. The sound is what matters. Closed objects draw as hollow rings |
 
 Non-goals: wall/occlusion modelling, listener-position-dependent reverb,
@@ -80,6 +81,10 @@ sample (window passes, or loop) ─► lowpass (open/closed) ─┬─► object
   `refDistance`, `rolloffFactor: 0`) and distance gain is computed by our own
   pure function, because the built-in models can't reach silence and the same
   number has to split between the direct path and the reverb send.
+- Loudness normalization isn't a separate node in this diagram: it's a
+  per-object multiplier (computed once at `addObject`, from the buffer) folded
+  into `objectGain`/`sendGain`'s target value alongside distance and the
+  Loudness slider.
 - Room is X/Z with Y fixed at 0. Listener heading goes into the
   `AudioListener`'s forward vector.
 - Gain changes on move use `setTargetAtTime`, not direct assignment, to avoid
@@ -137,13 +142,21 @@ claimed in the root `CLAUDE.md` ledger.
 
 `make verify` (Playwright, headless Chromium) on the golden path: load a
 synthesized folder of test samples, confirm the cap applies, confirm objects and
-listener render, confirm keyboard movement changes listener position, confirm every object starts
+listener render, confirm keyboard movement changes listener position, confirm the
+walk-speed and turn-speed sliders actually scale that movement (with the
+listener's position/heading undone afterward before the fixed-speed checks
+below rely on it), confirm every object starts
 closed, confirm clicking an object toggles it while dragging doesn't, confirm a
 closed tone records at <0.2x the level of the same tone opened, confirm the
 closing sweep by sampling the filter's own frequency while it moves (continuous,
 monotonic, ~the configured transition time; a step-size check catches a ramp
 that snaps -- verified by deliberately removing the ramp's anchor, which drops
-one step to 0.05x versus 0.93x normally), confirm a
+one step to 0.05x versus 0.93x normally), confirm the sample window's planning
+math and the passes actually scheduled (random and wander start modes, rests),
+confirm loudness normalization's pure math and, loading a quiet and a loud tone
+each alone, confirm the real per-object gain node matches the expected
+normalization gain exactly (including the +12 dB clamp) and that both tones'
+corrected level converges toward the same target, confirm a
 short recording downloads a valid PCM `.wav` (RIFF header, non-silent). Audio
 *quality* — whether front/back actually reads through headphones — can't be
 verified by script and needs a manual listen.

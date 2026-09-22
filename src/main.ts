@@ -3,8 +3,8 @@ import { bindSlider, rangeControl } from "bruit-kit/ui";
 import { unlockAudioContext } from "./audioContext";
 import { createKeyboardControls } from "./keyboard";
 import {
-  LISTENER_SPEED,
-  LISTENER_TURN_RATE,
+  DEFAULT_LISTENER_SPEED,
+  DEFAULT_LISTENER_TURN_RATE,
   type RoomState,
   type SoundObject,
   clamp,
@@ -58,15 +58,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
   const roomControlsEl = query("#room-controls");
   roomControlsEl.innerHTML =
     rangeControl("room-width", "Width (m)", 4, 40, 1, room.width) +
-    rangeControl("room-height", "Height (m)", 4, 40, 1, room.height) +
-    rangeControl(
-      "hearing-range",
-      "Hearing range (m)",
-      2,
-      40,
-      1,
-      room.hearingRange,
-    );
+    rangeControl("room-height", "Height (m)", 4, 40, 1, room.height);
 
   // Shrinking the room must not strand the listener or an object outside
   // it, where they'd be undraggable and unreachable.
@@ -89,10 +81,53 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     keepInsideRoom();
     dirty = true;
   });
+  // Keyboard-only: dragging the listener is a direct 1:1 pointer move, with
+  // no notion of speed to adjust.
+  query("#listener-controls").innerHTML =
+    rangeControl(
+      "hearing-range",
+      "Hearing range (m)",
+      2,
+      40,
+      1,
+      room.hearingRange,
+    ) +
+    rangeControl(
+      "walk-speed",
+      "Walk speed (m/s)",
+      0.2,
+      8,
+      0.1,
+      DEFAULT_LISTENER_SPEED,
+    ) +
+    rangeControl(
+      "turn-speed",
+      "Turn speed (deg/s)",
+      10,
+      360,
+      5,
+      (DEFAULT_LISTENER_TURN_RATE * 180) / Math.PI,
+    );
+  let walkSpeed = DEFAULT_LISTENER_SPEED;
+  let turnRate = DEFAULT_LISTENER_TURN_RATE;
   bindSlider("hearing-range", (value) => {
     room.hearingRange = value;
     dirty = true;
   });
+  bindSlider(
+    "walk-speed",
+    (value) => {
+      walkSpeed = value;
+    },
+    { hardMin: 0.2, hardMax: 8 },
+  );
+  bindSlider(
+    "turn-speed",
+    (degreesPerSecond) => {
+      turnRate = (degreesPerSecond * Math.PI) / 180;
+    },
+    { hardMin: 10, hardMax: 360 },
+  );
 
   query("#reverb-controls").innerHTML =
     rangeControl("reverb-decay", "Decay (s)", 0.2, 8, 0.1, 2) +
@@ -489,10 +524,9 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     const { forward, strafe, turn } = keys.axes();
     if (forward !== 0 || strafe !== 0 || turn !== 0) {
       const { listener } = room;
-      listener.heading += turn * LISTENER_TURN_RATE * dt;
+      listener.heading += turn * turnRate * dt;
       // Normalised so walking diagonally isn't faster than straight.
-      const step =
-        (LISTENER_SPEED * dt) / Math.max(1, Math.hypot(forward, strafe));
+      const step = (walkSpeed * dt) / Math.max(1, Math.hypot(forward, strafe));
       const moved = clampToRoom(
         room,
         listener.x +
