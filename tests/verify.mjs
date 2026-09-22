@@ -173,6 +173,19 @@ async function setSlider(id, value) {
     [id, value],
   );
 }
+// Not page.fill(): that simulates real typing and leaves the field
+// genuinely focused, so *any later click elsewhere on the page* blurs it
+// and fires a second native "change" -- silently re-running populate() and
+// reshuffling every object to a new random position out from under a test
+// that already computed coordinates from the first placement. Setting
+// .value directly (like setSlider above) never moves real focus at all.
+async function setMaxObjects(value) {
+  await page.evaluate((v) => {
+    const el = document.querySelector("#max-objects");
+    el.value = String(v);
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
 async function canvasPoint(datasetKey) {
   const box = await page.locator("#room-canvas").boundingBox();
   const raw = await page.getAttribute("#room-canvas", `data-${datasetKey}`);
@@ -256,15 +269,13 @@ if ((await page.locator("#object-list li").count()) === 15) {
   fail("expected 15 object rows at the default cap");
 }
 
-await page.fill("#max-objects", "64");
-await page.dispatchEvent("#max-objects", "change");
+await setMaxObjects(64);
 await waitForStatus(/^21 of 21 files placed$/);
 ok(
   "raising the cap places every file, including the 24-bit AIFF, with no decode failures",
 );
 
-await page.fill("#max-objects", "5");
-await page.dispatchEvent("#max-objects", "change");
+await setMaxObjects(5);
 await waitForStatus(/^5 of 21 files placed/);
 if ((await page.locator("#object-list li").count()) === 5) {
   ok("lowering the cap re-places just that many");
@@ -1200,6 +1211,371 @@ if (
     `normalization should bring both tones toward ${TARGET_RMS}: loud effective ${loudEffective}, quiet raw ${quiet.rms} -> corrected ${quietEffective}`,
   );
 }
+
+// --- Rectangular multi-select and the right-click object menu.
+const selectDir = path.join(os.tmpdir(), "bruit-space-verify-select");
+rmSync(selectDir, { recursive: true, force: true });
+mkdirSync(selectDir, { recursive: true });
+for (let i = 0; i < 4; i++) {
+  writeFileSync(
+    path.join(selectDir, `sel-${i}.wav`),
+    wavFile(sineSamples(440 + i * 50)),
+  );
+}
+await setMaxObjects(4);
+await page.setInputFiles("#folder-input", selectDir);
+await waitForStatus(/^4 of 4 files placed/);
+
+const selectedIds = async () =>
+  JSON.parse(await page.getAttribute("#room-canvas", "data-selected-ids"));
+const selectedRowCount = () => page.locator(".object-row.is-selected").count();
+async function objectScreenPoint(id) {
+  const object = (await canvasObjects()).find((o) => o.id === id);
+  const box = await page.locator("#room-canvas").boundingBox();
+  return { x: box.x + object.x, y: box.y + object.y };
+}
+const rowGain = async (id) =>
+  Number(
+    await page.inputValue(`.object-row[data-id="${id}"] input[type="range"]`),
+  );
+const rowMuted = (id) =>
+  page.isChecked(`.object-row[data-id="${id}"] input[type="checkbox"]`);
+const rowState = (id) =>
+  page.textContent(`.object-row[data-id="${id}"] .state-toggle`);
+const rowName = (id) =>
+  page.textContent(`.object-row[data-id="${id}"] .object-name`);
+
+// Drag from just outside one corner of the room rect to just outside the
+// opposite corner: encloses every object regardless of where they randomly
+// landed. The room rect's own screen bounds are read back rather than
+// re-derived, same as every other geometry-dependent check in this file.
+const [rx, ry, rw, rh] = (
+  await page.getAttribute("#room-canvas", "data-room-rect-px")
+)
+  .split(",")
+  .map(Number);
+const selectCanvasBox = await page.locator("#room-canvas").boundingBox();
+const roomTopLeft = { x: selectCanvasBox.x + rx, y: selectCanvasBox.y + ry };
+const roomBottomRight = {
+  x: selectCanvasBox.x + rx + rw,
+  y: selectCanvasBox.y + ry + rh,
+};
+await page.mouse.move(roomTopLeft.x - 10, roomTopLeft.y - 10);
+await page.mouse.down();
+await page.mouse.move(roomBottomRight.x + 10, roomBottomRight.y + 10, {
+  steps: 8,
+});
+await page.mouse.up();
+await page.waitForTimeout(100);
+const allIds = (await canvasObjects()).map((o) => o.id).sort();
+if (
+  JSON.stringify((await selectedIds()).sort()) === JSON.stringify(allIds) &&
+  (await selectedRowCount()) === 4
+) {
+  ok("dragging a marquee over the whole room selects every object");
+} else {
+  fail(
+    `marquee-select-all failed: selected ${JSON.stringify(await selectedIds())}, expected ${JSON.stringify(allIds)}`,
+  );
+}
+
+// A tiny marquee entirely in the padding margin outside the room rect --
+// never possible to enclose an object there -- clears the selection.
+await page.mouse.move(roomTopLeft.x - 20, roomTopLeft.y - 20);
+await page.mouse.down();
+await page.mouse.move(roomTopLeft.x - 12, roomTopLeft.y - 12, { steps: 3 });
+await page.mouse.up();
+await page.waitForTimeout(100);
+if ((await selectedIds()).length === 0 && (await selectedRowCount()) === 0) {
+  ok("a marquee over empty space clears the selection");
+} else {
+  fail(
+    `expected an empty selection, got ${JSON.stringify(await selectedIds())}`,
+  );
+}
+
+// A plain click on one object still selects just that one (marquee support
+// hasn't changed the ordinary single-select gesture).
+const [firstId, secondId, thirdId] = allIds;
+await page.click(`.object-row[data-id="${firstId}"] .object-name`);
+if ((await selectedRowCount()) === 1) {
+  ok("a plain click still selects a single object");
+} else {
+  fail(`expected exactly 1 selected row, got ${await selectedRowCount()}`);
+}
+
+// Right-click a single (already-selected) object: the menu targets it
+// alone, and a live change applies to it and only it.
+const firstPoint = await objectScreenPoint(firstId);
+await page.mouse.click(firstPoint.x, firstPoint.y, { button: "right" });
+await page.waitForSelector(".object-menu");
+const firstName = await rowName(firstId);
+const menuTitle = await page.textContent(".object-menu-header span");
+if (menuTitle === firstName) {
+  ok(`context menu on a single object shows its name ("${firstName}")`);
+} else {
+  fail(`expected menu title "${firstName}", got "${menuTitle}"`);
+}
+
+await setSlider("object-menu-gain", 0.05);
+await page.waitForTimeout(100);
+if (near(await rowGain(firstId), 0.05)) {
+  ok("the menu's Loudness slider changes the object list row's gain");
+} else {
+  fail(`expected row gain 0.05, got ${await rowGain(firstId)}`);
+}
+
+await page.click(".object-menu-row input[type=checkbox]");
+await page.waitForTimeout(100);
+if (await rowMuted(firstId)) {
+  ok("the menu's Mute checkbox mutes the row");
+} else {
+  fail("expected the row to be muted after checking the menu's Mute box");
+}
+
+const stateBefore = await rowState(firstId);
+await page.click(".object-menu-state-button");
+await page.waitForTimeout(100);
+const stateAfter = await rowState(firstId);
+if (stateBefore === "closed" && stateAfter === "open") {
+  ok(
+    "the menu's open/closed button toggles the row (new objects start closed)",
+  );
+} else {
+  fail(`expected closed -> open, got ${stateBefore} -> ${stateAfter}`);
+}
+
+await page.keyboard.press("Escape");
+if ((await page.locator(".object-menu").count()) === 0) {
+  ok("Escape closes the menu");
+} else {
+  fail("menu is still open after Escape");
+}
+
+// Re-select all 4 (marquee, as above) and right-click one of them: the
+// menu now targets the whole selection, and a change applies to all of it,
+// not just the one actually clicked.
+await page.mouse.move(roomTopLeft.x - 10, roomTopLeft.y - 10);
+await page.mouse.down();
+await page.mouse.move(roomBottomRight.x + 10, roomBottomRight.y + 10, {
+  steps: 8,
+});
+await page.mouse.up();
+await page.waitForTimeout(100);
+
+await page.mouse.click(firstPoint.x, firstPoint.y, { button: "right" });
+await page.waitForSelector(".object-menu");
+const multiTitle = await page.textContent(".object-menu-header span");
+if (multiTitle === "4 objects") {
+  ok('right-clicking a member of a 4-object selection shows "4 objects"');
+} else {
+  fail(`expected "4 objects", got "${multiTitle}"`);
+}
+
+await setSlider("object-menu-gain", 0.77);
+await page.waitForTimeout(100);
+const allGains = await Promise.all(allIds.map((id) => rowGain(id)));
+if (allGains.every((g) => near(g, 0.77))) {
+  ok(
+    `a menu change on a multi-selection applied to all ${allIds.length} rows (${allGains.map((g) => g.toFixed(2)).join(", ")})`,
+  );
+} else {
+  fail(`not every row got the change: ${allGains.join(", ")}`);
+}
+// The menu's full-viewport overlay would swallow a click on the row
+// underneath it, so close it first (Escape), then reselect.
+await page.keyboard.press("Escape");
+await page.click(`.object-row[data-id="${firstId}"] .object-name`);
+
+// Right-clicking an object that ISN'T the current (single-object)
+// selection reselects to just that one, rather than acting on both.
+const secondPoint = await objectScreenPoint(secondId);
+await page.mouse.click(secondPoint.x, secondPoint.y, { button: "right" });
+await page.waitForSelector(".object-menu");
+const secondName = await rowName(secondId);
+const soloTitle = await page.textContent(".object-menu-header span");
+const isSecondRowSelected = await page
+  .locator(`.object-row[data-id="${secondId}"]`)
+  .evaluate((el) => el.classList.contains("is-selected"));
+if (
+  soloTitle === secondName &&
+  (await selectedRowCount()) === 1 &&
+  isSecondRowSelected
+) {
+  ok(
+    "right-clicking an object outside the current selection reselects to just that one",
+  );
+} else {
+  fail(
+    `expected reselect to "${secondName}" alone, got title "${soloTitle}", ${await selectedRowCount()} selected rows`,
+  );
+}
+
+// A click outside the menu (even over the room canvas, underneath it)
+// closes it without acting on whatever's under the click. The previous
+// step's menu (on secondId) is still open -- its own full-viewport overlay
+// would otherwise swallow this section's right-click before it ever
+// reaches the canvas, so close it first.
+await page.keyboard.press("Escape");
+const thirdPoint = await objectScreenPoint(thirdId);
+await page.mouse.click(thirdPoint.x, thirdPoint.y, { button: "right" });
+await page.waitForSelector(".object-menu");
+await page.mouse.click(20, 20);
+if ((await page.locator(".object-menu").count()) === 0) {
+  ok("clicking outside the menu closes it");
+} else {
+  fail("menu is still open after an outside click");
+}
+
+// --- Group drag: grabbing any member of a >1 selection moves the whole
+// selection together, clamped to the room.
+await page.mouse.move(roomTopLeft.x - 10, roomTopLeft.y - 10);
+await page.mouse.down();
+await page.mouse.move(roomBottomRight.x + 10, roomBottomRight.y + 10, {
+  steps: 8,
+});
+await page.mouse.up();
+await page.waitForTimeout(100);
+
+// Drag toward the room's centre (canvas-local frame, same as
+// canvasObjects()'s own coordinates) -- same reasoning as the
+// single-object drag test above: a group member already near a wall would
+// clamp this drag and make it useless for checking an exact, unclamped
+// shift.
+const beforeShift = await canvasObjects();
+const centroid = {
+  x: beforeShift.reduce((sum, o) => sum + o.x, 0) / beforeShift.length,
+  y: beforeShift.reduce((sum, o) => sum + o.y, 0) / beforeShift.length,
+};
+const roomCenterLocal = { x: rx + rw / 2, y: ry + rh / 2 };
+const shiftDx = Math.sign(roomCenterLocal.x - centroid.x || 1) * 15;
+const shiftDy = Math.sign(roomCenterLocal.y - centroid.y || 1) * 15;
+const grabPoint = await objectScreenPoint(firstId);
+await page.mouse.move(grabPoint.x, grabPoint.y);
+await page.mouse.down();
+await page.mouse.move(grabPoint.x + shiftDx, grabPoint.y + shiftDy, {
+  steps: 6,
+});
+await page.mouse.up();
+await page.waitForTimeout(100);
+const afterShift = await canvasObjects();
+const shiftedTogether = allIds.every((id) => {
+  const before = beforeShift.find((o) => o.id === id);
+  const after = afterShift.find((o) => o.id === id);
+  return (
+    Math.abs(after.x - before.x - shiftDx) < 0.6 &&
+    Math.abs(after.y - before.y - shiftDy) < 0.6
+  );
+});
+if (shiftedTogether && (await selectedIds()).length === 4) {
+  ok(
+    `dragging one member of a 4-object selection moves all 4 together (${shiftDx}, ${shiftDy} px each)`,
+  );
+} else {
+  fail(
+    `expected all 4 to shift by (${shiftDx}, ${shiftDy}) px, got ${JSON.stringify(
+      allIds.map((id) => {
+        const before = beforeShift.find((o) => o.id === id);
+        const after = afterShift.find((o) => o.id === id);
+        return { id, dx: after.x - before.x, dy: after.y - before.y };
+      }),
+    )}`,
+  );
+}
+
+// A drag hard enough to push the group's nearest edge past a wall clamps
+// as one shared delta -- the whole group stops together at the wall
+// rather than letting whichever object got there first lag behind, which
+// would distort the selection's shape. Drag toward the top-left corner,
+// far enough past it that clamping is certain regardless of room size.
+const beforeClamp = await canvasObjects();
+const grabPoint2 = await objectScreenPoint(firstId);
+await page.mouse.move(grabPoint2.x, grabPoint2.y);
+await page.mouse.down();
+await page.mouse.move(roomTopLeft.x - 500, roomTopLeft.y - 500, {
+  steps: 8,
+});
+await page.mouse.up();
+await page.waitForTimeout(100);
+const afterClamp = await canvasObjects();
+
+const staysInRoom = afterClamp.every((o) => o.x >= rx - 0.6 && o.y >= ry - 0.6);
+const anyAtWall = afterClamp.some(
+  (o) => Math.abs(o.x - rx) < 1 || Math.abs(o.y - ry) < 1,
+);
+const relPreserved = allIds.every((id) => {
+  const beforeFirst = beforeClamp.find((o) => o.id === firstId);
+  const afterFirst = afterClamp.find((o) => o.id === firstId);
+  const before = beforeClamp.find((o) => o.id === id);
+  const after = afterClamp.find((o) => o.id === id);
+  return (
+    Math.abs(before.x - beforeFirst.x - (after.x - afterFirst.x)) < 0.6 &&
+    Math.abs(before.y - beforeFirst.y - (after.y - afterFirst.y)) < 0.6
+  );
+});
+if (staysInRoom && anyAtWall && relPreserved) {
+  ok(
+    "dragging a selection past a wall clamps the whole group together at the wall, without distorting it",
+  );
+} else {
+  fail(
+    `clamped group drag failed: staysInRoom=${staysInRoom} anyAtWall=${anyAtWall} relPreserved=${relPreserved}, positions ${JSON.stringify(afterClamp)}`,
+  );
+}
+
+// A plain click (no drag) on a member of a multi-selection still toggles
+// just that one object's open/closed state, same as any other object --
+// it doesn't also collapse the selection down to it the way a click on an
+// unselected object does.
+const beforeToggle = await rowState(firstId);
+const clickPoint = await objectScreenPoint(firstId);
+await page.mouse.click(clickPoint.x, clickPoint.y);
+await page.waitForTimeout(100);
+const afterToggle = await rowState(firstId);
+if (
+  afterToggle !== beforeToggle &&
+  (await selectedIds()).length === 4 &&
+  (await selectedRowCount()) === 4
+) {
+  ok(
+    `a plain click on a selected object toggles just that one (${beforeToggle} -> ${afterToggle}) and keeps the group selected`,
+  );
+} else {
+  fail(
+    `expected a toggle from "${beforeToggle}" and the selection to stay at 4, got "${afterToggle}", ${(await selectedIds()).length} selected`,
+  );
+}
+
+// Regression: the menu's Loudness slider used to wire itself up via
+// requestAnimationFrame, on the mistaken assumption that innerHTML needs a
+// frame to land (it doesn't -- it's synchronous). That gap let the menu
+// close before the deferred callback fired, throwing on a null lookup.
+// Reproduced directly (open then close via its real close button, with no
+// await between them, so zero frames elapse) rather than relying on real
+// interaction timing, which only occasionally happened to land the race.
+const raceErrors = [];
+page.once("pageerror", (err) => raceErrors.push(err.message));
+await page.evaluate(async () => {
+  const { openObjectContextMenu } = await import("/src/objectContextMenu.ts");
+  openObjectContextMenu({
+    x: 50,
+    y: 50,
+    label: "race test",
+    initial: { gain: 0.5, muted: false, closed: false },
+    onGainChange() {},
+    onMutedChange() {},
+    onClosedChange() {},
+  });
+  document.querySelector(".object-menu-close").click();
+});
+await page.waitForTimeout(200); // a deferred callback, if any, gets to fire and throw
+if (raceErrors.length === 0) {
+  ok("opening then immediately closing the menu (same tick) doesn't throw");
+} else {
+  fail(`same-tick open/close threw: ${raceErrors.join("; ")}`);
+}
+
+rmSync(selectDir, { recursive: true, force: true });
 
 if (errors.length > 0) fail(`console/page errors:\n  ${errors.join("\n  ")}`);
 else ok("no console or page errors");

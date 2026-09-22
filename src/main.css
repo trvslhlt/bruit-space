@@ -202,6 +202,67 @@ button:disabled {
   color: var(--accent);
 }
 
+/* Right-click object menu (objectContextMenu.ts). Unlike a modal dialog,
+ * the backdrop is transparent, not dimmed -- it exists only to catch an
+ * outside click, not to draw attention away from the room. */
+.object-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+
+.object-menu {
+  position: fixed;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 200px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.object-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.object-menu-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+}
+
+.object-menu-body {
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.object-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.object-menu-slider-row label {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.object-menu-state-button {
+  align-self: flex-start;
+}
+
 .info-bar {
   display: flex;
   gap: 1.5rem;

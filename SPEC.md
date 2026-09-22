@@ -33,6 +33,9 @@ components are a bonus, and should land in `bruit-kit`.
 | Reverb | One global reverb, listener-independent. Room size maps to decay/pre-delay/damping, not geometry. Each object's *wet fraction* (share of its sound that is reverb vs direct) is interpolated linearly from a "wet at object" setting (listener on top of it, default 0.1) to a "wet at range edge" setting (default 1). Direct = total × (1 − wet), send = total × wet, where total follows the shared distance curve, so both fade to silence together at the hearing range |
 | Recording | Lossless PCM capture of the master output, written directly to `.wav`. Not `MediaRecorder` (see below) |
 | Object state | Each object is open (the plain sound) or closed (muffled), and every object starts closed. Click it on the map to toggle; a drag moves it without toggling. Closed = a lowpass whose cutoff (default 300 Hz) and sweep time (default 700 ms) are global settings. The sweep is exponential in frequency, from Nyquist (an identity filter, so open is truly unfiltered) down to the cutoff, and can be reversed mid-sweep. The filter sits before both the dry path and the reverb send, so a closed object's reverb is muffled too |
+| Selection | A single click selects one object (existing behaviour). Left-click-dragging from empty room floor draws a marquee; on release, every object whose position falls inside it becomes the selection (`objectsInRect` in room.ts), replacing whatever was selected. A drag on empty floor that never leaves the click slop is just a plain click and clears the selection, same as before. `RoomState.selectedIds` is a `Set<number>`, not a single id |
+| Group drag | Dragging any object that's already part of a >1-object selection (`RoomView`'s `Drag` union's `"group"` case) moves the whole selection as a rigid shape instead of collapsing to just that one object: every selected object's room-space position is snapshotted when the drag starts, and each pointermove derives a single shared delta from the pointer's own movement, clamped once (not per-object) so the group's own extremes stay inside the room -- clamping per-object instead would let the group bunch up against a wall and distort relative to itself. A plain (undragged) click on a selected object still just toggles that one object's open/closed state, same as any other object, without collapsing the selection |
+| Object context menu | Right-click an object (map or Objects-list row) for a small menu (Mute, Loudness, open/closed) — `objectContextMenu.ts`, styled like but not built on bruit-kit's `rangeMenu.ts` (anchored at the click point, bundles several unrelated fields, rather than that module's centered single-value dialog). If the clicked object is already part of a >1-object selection, every change applies to the whole selection; otherwise the click first reselects to just that object (matching a plain left-click), then applies to it alone |
 | Visuals | Minimal technical map. The sound is what matters. Closed objects draw as hollow rings |
 
 Non-goals: wall/occlusion modelling, listener-position-dependent reverb,
@@ -156,8 +159,23 @@ math and the passes actually scheduled (random and wander start modes, rests),
 confirm loudness normalization's pure math and, loading a quiet and a loud tone
 each alone, confirm the real per-object gain node matches the expected
 normalization gain exactly (including the +12 dB clamp) and that both tones'
-corrected level converges toward the same target, confirm a
-short recording downloads a valid PCM `.wav` (RIFF header, non-silent). Audio
+corrected level converges toward the same target, confirm a marquee drag
+encloses exactly the objects inside it (and that a marquee over empty
+padding clears the selection instead), confirm the right-click menu shows
+one object's own name or "N objects" correctly, that a change applies to
+every object in a multi-selection (not just the one actually clicked, with
+a mutation check confirming this fails if that's ever broken), that
+right-clicking outside the current selection reselects to just the clicked
+object, and that the menu closes on Escape or an outside click, confirm
+dragging one member of a multi-selection shifts every selected object by
+the same amount (mutation-checked: moving only the grabbed object, or
+collapsing the selection to it, both fail the same test), that a drag hard
+enough to push the group into a wall clamps the whole group together there
+without distorting their relative positions (mutation-checked against a
+version that clamps per-object instead), and that a plain click on a
+selected object still just toggles it rather than moving or collapsing the
+selection, confirm a short recording downloads a valid PCM `.wav` (RIFF
+header, non-silent). Audio
 *quality* — whether front/back actually reads through headphones — can't be
 verified by script and needs a manual listen.
 

@@ -2,6 +2,7 @@ import { distanceGain } from "bruit-kit/audio";
 import { bindSlider, rangeControl } from "bruit-kit/ui";
 import { unlockAudioContext } from "./audioContext";
 import { createKeyboardControls } from "./keyboard";
+import { openObjectContextMenu } from "./objectContextMenu";
 import {
   DEFAULT_LISTENER_SPEED,
   DEFAULT_LISTENER_TURN_RATE,
@@ -51,7 +52,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       heading: 0,
     },
     objects: [],
-    selectedId: null,
+    selectedIds: new Set(),
   };
   let dirty = true;
 
@@ -304,20 +305,35 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     onMove: () => {
       dirty = true;
     },
-    onSelect: (id) => select(id),
+    onSelect: (ids) => select(ids),
     onToggle: (id) => toggleClosed(id),
+    onContextMenu: (id, x, y) => openObjectMenu(id, x, y),
   });
 
   const objectListEl = query<HTMLUListElement>("#object-list");
 
-  function select(id: number | null): void {
-    room.selectedId = id;
+  /** Replaces the current selection (empty array clears it) and reflects it
+   * onto the Objects list. The room-canvas highlight ring reads
+   * room.selectedIds directly in its own draw(), so `dirty = true` is
+   * enough to update that side. */
+  function select(ids: number[]): void {
+    room.selectedIds = new Set(ids);
+    syncSelectionHighlight();
+    dirty = true;
+  }
+
+  /** Re-applies room.selectedIds to the Objects list rows -- its own
+   * function (not folded into select()) because renderObjectList() also
+   * needs it, for the rows it just rebuilt from scratch. */
+  function syncSelectionHighlight(): void {
     for (const row of objectListEl.querySelectorAll<HTMLElement>(
       ".object-row",
     )) {
-      row.classList.toggle("is-selected", Number(row.dataset.id) === id);
+      row.classList.toggle(
+        "is-selected",
+        room.selectedIds.has(Number(row.dataset.id)),
+      );
     }
-    dirty = true;
   }
 
   function applyStateButton(button: HTMLElement, object: SoundObject): void {
@@ -335,6 +351,57 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     );
     if (button) applyStateButton(button, object);
     dirty = true;
+  }
+
+  /** The objects a context-menu action should apply to: the right-clicked
+   * object alone, unless it's already part of a multi-object selection --
+   * in which case the whole selection is the target, matching how most
+   * apps treat a right-click inside vs. outside an existing selection.
+   * Right-clicking outside the current selection replaces it with just the
+   * clicked object, same as a plain left-click would. */
+  function contextMenuTargets(clickedId: number): SoundObject[] {
+    if (!(room.selectedIds.has(clickedId) && room.selectedIds.size > 1)) {
+      select([clickedId]);
+    }
+    return room.objects.filter((o) => room.selectedIds.has(o.id));
+  }
+
+  function openObjectMenu(
+    clickedId: number,
+    pageX: number,
+    pageY: number,
+  ): void {
+    const targets = contextMenuTargets(clickedId);
+    const primary = targets.find((o) => o.id === clickedId) ?? targets[0];
+    if (!primary) return;
+    openObjectContextMenu({
+      x: pageX,
+      y: pageY,
+      label: targets.length === 1 ? primary.name : `${targets.length} objects`,
+      initial: {
+        gain: primary.gain,
+        muted: primary.muted,
+        closed: primary.closed,
+      },
+      onGainChange: (value) => {
+        for (const object of targets) object.gain = value;
+        dirty = true;
+        renderObjectList();
+      },
+      onMutedChange: (value) => {
+        for (const object of targets) object.muted = value;
+        dirty = true;
+        renderObjectList();
+      },
+      onClosedChange: (value) => {
+        for (const object of targets) {
+          object.closed = value;
+          engine.setObjectClosed(object.id, value);
+        }
+        dirty = true;
+        renderObjectList();
+      },
+    });
   }
 
   function renderObjectList(): void {
@@ -374,6 +441,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       muteLabel.title = "Mute";
       const mute = document.createElement("input");
       mute.type = "checkbox";
+      mute.checked = object.muted;
       mute.addEventListener("change", () => {
         object.muted = mute.checked;
         dirty = true;
@@ -381,9 +449,14 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       muteLabel.append(mute, " M");
 
       row.append(name, gain, stateButton, muteLabel);
-      row.addEventListener("click", () => select(object.id));
+      row.addEventListener("click", () => select([object.id]));
+      row.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openObjectMenu(object.id, event.clientX, event.clientY);
+      });
       objectListEl.appendChild(row);
     }
+    syncSelectionHighlight();
   }
 
   const folderInput = query<HTMLInputElement>("#folder-input");
@@ -408,7 +481,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     reshuffleButton.disabled = true;
     engine.clearObjects();
     room.objects = [];
-    room.selectedId = null;
+    room.selectedIds = new Set();
     renderObjectList();
     dirty = true;
 
@@ -501,7 +574,11 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     const degrees = Math.round(((heading * 180) / Math.PI) % 360);
     listenerReadout.textContent = `listener x ${x.toFixed(1)} m · y ${y.toFixed(1)} m · heading ${(degrees + 360) % 360}°`;
 
-    const selected = room.objects.find((o) => o.id === room.selectedId);
+    if (room.selectedIds.size > 1) {
+      selectedReadout.textContent = `${room.selectedIds.size} objects selected`;
+      return;
+    }
+    const selected = room.objects.find((o) => room.selectedIds.has(o.id));
     if (!selected) {
       selectedReadout.textContent = "";
       return;

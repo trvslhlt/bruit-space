@@ -65,6 +65,28 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
   `gesture_`/`atom_`/`hint_` files as events with a small range and a tight
   window.
 
+## Selection and the object menu
+
+- ~~**Rectangular multi-select and a right-click menu** for mute/loudness/
+  open-closed, applying to a whole selection.~~ Done: drag a marquee over
+  empty floor to select several objects; right-click (map or Objects-list
+  row) for the menu.
+- ~~**Drag a whole selection at once**, constrained so it can't be pushed
+  out of the room.~~ Done: dragging any member of a >1-object selection
+  moves the whole group together, clamped as one shape at the walls rather
+  than per object.
+- **Additive selection.** A marquee, or a plain click, always replaces the
+  current selection -- no shift-click/shift-drag to add or remove
+  individual objects. Would need a small change to `onSelect`'s callers in
+  main.ts, not to RoomView's own marquee mechanics.
+- **More menu fields.** The menu only covers Mute/Loudness/open-closed
+  (what was asked for) -- position (drag remains the only way to move an
+  object) and per-object sample-window/wander/rest overrides, once those
+  exist per-object at all (see "Per-object scatter" above), would belong
+  here too.
+- **Delete/duplicate from the menu**, once there's a way to add a single
+  object outside of loading a whole folder.
+
 ## Recording
 
 - **Auto-walk.** The listener follows a slow wander path so a take doesn't

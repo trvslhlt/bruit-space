@@ -2,8 +2,10 @@ import { distanceGain } from "bruit-kit/audio";
 import {
   type RoomState,
   type SoundObject,
+  clamp,
   clampToRoom,
   distanceToListener,
+  objectsInRect,
 } from "./room";
 
 const PADDING = 24;
@@ -17,14 +19,37 @@ const CLICK_SLOP_PX = 4;
 type Drag =
   | { kind: "listener"; offsetX: number; offsetY: number }
   | { kind: "nose" }
-  | { kind: "object"; id: number; offsetX: number; offsetY: number };
+  | { kind: "object"; id: number; offsetX: number; offsetY: number }
+  // Dragging any member of a >1 selection moves the whole group as a
+  // rigid shape: `origins` is every selected object's room-space position
+  // when the drag began, and each pointermove re-derives one shared delta
+  // from `startX`/`startY` rather than per-object offsets, so the group
+  // can't distort relative to itself. `clickedId` is only for a plain
+  // (undragged) click -- see onPointerUp -- and plays no part in movement.
+  | {
+      kind: "group";
+      ids: number[];
+      origins: Map<number, { x: number; y: number }>;
+      clickedId: number;
+      startX: number;
+      startY: number;
+    }
+  // Room-space, not screen -- makes the final objectsInRect() test trivial
+  // and keeps the rectangle correct if the view is resized mid-drag.
+  | { kind: "marquee"; startX: number; startY: number; x: number; y: number };
 
 export interface RoomViewCallbacks {
   /** Something in the room was moved by the pointer. */
   onMove(): void;
-  onSelect(id: number | null): void;
+  /** Replaces the current selection (empty array clears it) -- a plain
+   * click on one object, a click on empty floor, starting to drag the
+   * listener, or releasing a marquee all go through this one callback. */
+  onSelect(ids: number[]): void;
   /** An object was clicked (pressed and released without dragging). */
   onToggle(id: number): void;
+  /** Right-click on `id`, at the given page coordinates (for positioning a
+   * menu) -- never fires for a right-click on empty floor. */
+  onContextMenu(id: number, pageX: number, pageY: number): void;
 }
 
 /** Top-down map of the room. Draws the state and turns pointer drags into
@@ -51,6 +76,7 @@ export class RoomView {
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.endDrag);
     canvas.addEventListener("lostpointercapture", this.endDrag);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
     new ResizeObserver(() => this.resize()).observe(canvas);
     this.resize();
   }
@@ -106,12 +132,35 @@ export class RoomView {
     return 6 + 8 * object.gain;
   }
 
-  private pointerPosition(event: PointerEvent): { x: number; y: number } {
+  private pointerPosition(event: MouseEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   }
 
+  /** The topmost (last-drawn) object under a screen-space point, if any --
+   * shared by pointerdown's hit-testing and the right-click menu. */
+  private hitTestObject(pointer: { x: number; y: number }):
+    | SoundObject
+    | undefined {
+    for (let i = this.room.objects.length - 1; i >= 0; i--) {
+      const object = this.room.objects[i];
+      const at = this.toScreen(object.x, object.y);
+      if (
+        Math.hypot(pointer.x - at.x, pointer.y - at.y) <=
+        this.objectRadiusPx(object) + 4
+      ) {
+        return object;
+      }
+    }
+    return undefined;
+  }
+
   private onPointerDown = (event: PointerEvent): void => {
+    // Right/middle click never starts a drag or a marquee -- the right
+    // button opens the context menu instead, via its own contextmenu
+    // listener below.
+    if (event.button !== 0) return;
+
     const pointer = this.pointerPosition(event);
     const roomPoint = this.toRoom(pointer.x, pointer.y);
     this.pressStart = pointer;
@@ -140,34 +189,62 @@ export class RoomView {
           offsetY: this.room.listener.y - roomPoint.y,
         };
       } else {
-        // Topmost (last-drawn) object wins when they overlap.
-        for (let i = this.room.objects.length - 1; i >= 0; i--) {
-          const object = this.room.objects[i];
-          const at = this.toScreen(object.x, object.y);
+        const object = this.hitTestObject(pointer);
+        if (object) {
           if (
-            Math.hypot(pointer.x - at.x, pointer.y - at.y) <=
-            this.objectRadiusPx(object) + 4
+            this.room.selectedIds.size > 1 &&
+            this.room.selectedIds.has(object.id)
           ) {
+            // Grabbing a member of an existing multi-selection drags the
+            // whole selection together and leaves it as-is; grabbing
+            // anything else (below) collapses to just that one object,
+            // same as a plain click always has.
+            const origins = new Map<number, { x: number; y: number }>();
+            for (const id of this.room.selectedIds) {
+              const selected = this.room.objects.find((o) => o.id === id);
+              if (selected) origins.set(id, { x: selected.x, y: selected.y });
+            }
+            this.drag = {
+              kind: "group",
+              ids: [...this.room.selectedIds],
+              origins,
+              clickedId: object.id,
+              startX: roomPoint.x,
+              startY: roomPoint.y,
+            };
+          } else {
             this.drag = {
               kind: "object",
               id: object.id,
               offsetX: object.x - roomPoint.x,
               offsetY: object.y - roomPoint.y,
             };
-            break;
           }
+        } else {
+          // Nothing hit: might become a marquee, might turn out to be a
+          // plain click on empty floor -- either way, selection isn't
+          // decided until pointerup knows which (see onPointerUp).
+          this.drag = {
+            kind: "marquee",
+            startX: roomPoint.x,
+            startY: roomPoint.y,
+            x: roomPoint.x,
+            y: roomPoint.y,
+          };
         }
       }
     }
 
-    if (this.drag) {
-      this.canvas.setPointerCapture(event.pointerId);
-      this.callbacks.onSelect(
-        this.drag.kind === "object" ? this.drag.id : null,
-      );
-    } else {
-      this.callbacks.onSelect(null);
+    this.canvas.setPointerCapture(event.pointerId);
+    if (this.drag.kind === "object") {
+      this.callbacks.onSelect([this.drag.id]);
+    } else if (this.drag.kind === "listener" || this.drag.kind === "nose") {
+      // Starting to move the listener clears any object selection, same as
+      // clicking empty room floor.
+      this.callbacks.onSelect([]);
     }
+    // group: selection already covers every dragged id, so it's left
+    // alone. marquee: deferred until pointerup knows what it enclosed.
   };
 
   private onPointerMove = (event: PointerEvent): void => {
@@ -201,7 +278,7 @@ export class RoomView {
           roomPoint.y + this.drag.offsetY,
         ),
       );
-    } else {
+    } else if (this.drag.kind === "object") {
       const { id, offsetX, offsetY } = this.drag;
       const object = this.room.objects.find((o) => o.id === id);
       if (object) {
@@ -210,6 +287,39 @@ export class RoomView {
           clampToRoom(this.room, roomPoint.x + offsetX, roomPoint.y + offsetY),
         );
       }
+    } else if (this.drag.kind === "group") {
+      const { ids, origins, startX, startY } = this.drag;
+      // One shared delta for the whole group, clamped so its own extremes
+      // (not each object's own position) stay inside the room -- clamping
+      // per-object instead would let the group bunch up against a wall and
+      // distort instead of moving as a rigid shape.
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      for (const origin of origins.values()) {
+        minX = Math.min(minX, origin.x);
+        maxX = Math.max(maxX, origin.x);
+        minY = Math.min(minY, origin.y);
+        maxY = Math.max(maxY, origin.y);
+      }
+      const deltaX = clamp(roomPoint.x - startX, -minX, this.room.width - maxX);
+      const deltaY = clamp(
+        roomPoint.y - startY,
+        -minY,
+        this.room.height - maxY,
+      );
+      for (const id of ids) {
+        const origin = origins.get(id);
+        const object = this.room.objects.find((o) => o.id === id);
+        if (origin && object) {
+          object.x = origin.x + deltaX;
+          object.y = origin.y + deltaY;
+        }
+      }
+    } else {
+      this.drag.x = roomPoint.x;
+      this.drag.y = roomPoint.y;
     }
     this.callbacks.onMove();
   };
@@ -217,8 +327,26 @@ export class RoomView {
   private onPointerUp = (): void => {
     if (this.drag?.kind === "object" && !this.dragged) {
       this.callbacks.onToggle(this.drag.id);
+    } else if (this.drag?.kind === "group" && !this.dragged) {
+      // A plain click on a selected object still toggles just that one --
+      // same as clicking any other object -- rather than the whole group.
+      this.callbacks.onToggle(this.drag.clickedId);
+    } else if (this.drag?.kind === "marquee") {
+      const { startX, startY, x, y } = this.drag;
+      const enclosed = this.dragged
+        ? objectsInRect(this.room.objects, startX, startY, x, y)
+        : [];
+      this.callbacks.onSelect(enclosed.map((o) => o.id));
     }
     this.endDrag();
+  };
+
+  private onContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
+    const object = this.hitTestObject(this.pointerPosition(event));
+    if (object) {
+      this.callbacks.onContextMenu(object.id, event.clientX, event.clientY);
+    }
   };
 
   private endDrag = (): void => {
@@ -297,7 +425,7 @@ export class RoomView {
         ctx.fillStyle = `rgba(76, 125, 255, ${0.2 + 0.8 * audibility})`;
         ctx.fill();
       }
-      if (object.id === room.selectedId) {
+      if (room.selectedIds.has(object.id)) {
         ctx.strokeStyle = "#e4e6eb";
         ctx.lineWidth = 2;
         ctx.stroke();
@@ -334,6 +462,22 @@ export class RoomView {
     ctx.fill();
     ctx.restore();
 
+    // Drawn last (on top of everything, unclipped) so it's always visible
+    // even started from the padding margin outside the room rect.
+    if (this.drag?.kind === "marquee" && this.dragged) {
+      const from = this.toScreen(this.drag.startX, this.drag.startY);
+      const to = this.toScreen(this.drag.x, this.drag.y);
+      const x = Math.min(from.x, to.x);
+      const y = Math.min(from.y, to.y);
+      const w = Math.abs(to.x - from.x);
+      const h = Math.abs(to.y - from.y);
+      ctx.fillStyle = "rgba(76, 125, 255, 0.15)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "#4c7dff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+    }
+
     // Screen positions of everything clickable/draggable, so a Playwright
     // check can grab them without re-deriving this file's layout math.
     this.canvas.dataset.objects = JSON.stringify(
@@ -349,5 +493,10 @@ export class RoomView {
     );
     this.canvas.dataset.listenerPx = `${listenerAt.x.toFixed(1)},${listenerAt.y.toFixed(1)}`;
     this.canvas.dataset.nosePx = `${nose.x.toFixed(1)},${nose.y.toFixed(1)}`;
+    this.canvas.dataset.selectedIds = JSON.stringify([...room.selectedIds]);
+    // The room rect's own screen bounds, so a marquee-select check can pick
+    // a point guaranteed to be outside the room (e.g. just above topLeft)
+    // without having to re-derive layout()'s centering/scale math itself.
+    this.canvas.dataset.roomRectPx = `${topLeft.x.toFixed(1)},${topLeft.y.toFixed(1)},${roomWidthPx.toFixed(1)},${roomHeightPx.toFixed(1)}`;
   }
 }

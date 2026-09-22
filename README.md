@@ -49,6 +49,21 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
 - **Mouse:** drag the ▲ to move the listener, drag the dot in front of it
   to turn. Drag any sound object to move it. Each object has its own
   loudness slider and mute in the Objects list.
+- **Select multiple objects** by left-click-dragging a rectangle over empty
+  room floor (a marquee) — every object inside it gets selected, replacing
+  whatever was selected before. A plain click on one object still selects
+  just that one, and a click on empty floor with no drag clears the
+  selection. Dragging any object that's already part of a multi-object
+  selection moves the whole selection together, keeping their positions
+  relative to each other — the group is stopped at the wall as a whole if
+  it would otherwise push a member outside the room, rather than letting
+  individual objects pile up at the edge.
+- **Right-click an object** (on the map or in the Objects list) for a menu
+  with Mute, Loudness and the open/closed toggle. If the object you
+  right-click is already part of a multi-object selection, a change in the
+  menu applies to every selected object at once; otherwise it applies (and
+  selects) just that one. Right-clicking outside the current selection
+  replaces it with just the object you clicked, same as a plain left-click.
 - **Open / closed:** every object starts closed. Click one on the map (or
   its open/closed button in the Objects list) to open it; click again to
   close it. Closed muffles it with a lowpass, reverb included, swept

@@ -28,7 +28,27 @@ export interface RoomState {
   hearingRange: number;
   listener: Listener;
   objects: SoundObject[];
-  selectedId: number | null;
+  selectedIds: Set<number>;
+}
+
+/** Every object whose position falls within the room-space rectangle
+ * spanned by the two given corners (order doesn't matter) -- the marquee
+ * select in roomView.ts's only real job, split out as pure math since it
+ * doesn't need a canvas to test. */
+export function objectsInRect(
+  objects: SoundObject[],
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): SoundObject[] {
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
+  return objects.filter(
+    (o) => o.x >= minX && o.x <= maxX && o.y >= minY && o.y <= maxY,
+  );
 }
 
 // Defaults for the Listener panel's Walk speed / Turn speed sliders --
