@@ -416,13 +416,13 @@ export class RoomView {
       ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
       if (object.closed) {
         // Hollow ring: closed reads as "shut", filled reads as "open".
-        ctx.fillStyle = `rgba(76, 125, 255, ${0.06 + 0.16 * audibility})`;
+        ctx.fillStyle = `rgba(76, 125, 255, ${0.03 + 0.09 * audibility})`;
         ctx.fill();
-        ctx.strokeStyle = `rgba(76, 125, 255, ${0.35 + 0.65 * audibility})`;
+        ctx.strokeStyle = `rgba(76, 125, 255, ${0.25 + 0.4 * audibility})`;
         ctx.lineWidth = 2;
         ctx.stroke();
       } else {
-        ctx.fillStyle = `rgba(76, 125, 255, ${0.2 + 0.8 * audibility})`;
+        ctx.fillStyle = `rgba(112, 156, 255, ${0.35 + 0.65 * audibility})`;
         ctx.fill();
       }
       if (room.selectedIds.has(object.id)) {
