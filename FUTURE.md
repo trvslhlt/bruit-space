@@ -58,6 +58,21 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
   good enough by ear.
 - **Per-object scatter** around the global values: closed cutoff (a trunk
   muffles harder than a box), sample window, reverb wet.
+- ~~**Degradation beyond reverb.** Objects sound the same kind of "far
+  away," just to varying degrees -- distance could color *how* an object
+  degrades, not just how much.~~ Done: each object is randomly assigned
+  one of 3 two-effect chains (`degradeMath.ts`) that fade in with distance
+  the same way reverb does.
+- ~~**Independent degrade intensity.** Reused reverb's own Near/Far wet
+  sliders at first, which made the degrade chains hard to actually
+  hear.~~ Done: a separate Degradation panel with its own Near/Far wet
+  pair (`setDegradeMix`, default 0.3/1 -- near deliberately higher than
+  reverb's own 0.1, since barely-engaged reverb still reads as a subtle
+  tail but barely-engaged degradation is nearly inaudible). Still open: a
+  way to reroll or manually pick an object's chain (from the context
+  menu?), a 4th+ chain, and exposing which chain an object has anywhere in
+  the UI (currently invisible except by ear -- it's engine-internal, not
+  stored on `SoundObject`, so nothing else can read or react to it).
 - **Filename-prefix roles.** The sample library's prefixes are semantic
   (`base_`, `texture_`, `gesture_`, `atom_`, `hint_`, `phrase_`, `sound_`,
   `exhibit_`, `damage_`, `effected_`, `original_`). Long quiet `base_` and
@@ -118,6 +133,6 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
   wet fraction instead).
 - **Listening checks still owed:** HRTF front/back quality over headphones,
   the default master level (0.9) with loud samples, the closed-cutoff
-  transition (300 Hz, 700 ms), and now loudness normalization -- it can
+  transition (300 Hz, 1900 ms), and now loudness normalization -- it can
   raise a quiet object's level up to 4x (+12 dB), which combined with the
   existing master-level concern is more headroom pressure to listen for.

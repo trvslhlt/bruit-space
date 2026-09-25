@@ -17,6 +17,8 @@ import { RoomView } from "./roomView";
 import { decodeFile, pickAudioFiles, shuffled } from "./sampleLoader";
 import {
   DEFAULT_CLOSED_CUTOFF_HZ,
+  DEFAULT_DEGRADE_WET_FAR,
+  DEFAULT_DEGRADE_WET_NEAR,
   DEFAULT_MASTER_LEVEL,
   DEFAULT_REST_MAX_MS,
   DEFAULT_REST_PROBABILITY,
@@ -171,6 +173,40 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     "reverb-wet-far",
     (value) => {
       engine.setReverbMix({ far: value });
+      dirty = true;
+    },
+    { hardMin: 0, hardMax: 1 },
+  );
+
+  query("#degrade-controls").innerHTML =
+    rangeControl(
+      "degrade-wet-near",
+      "Wet at object",
+      0,
+      1,
+      0.05,
+      DEFAULT_DEGRADE_WET_NEAR,
+    ) +
+    rangeControl(
+      "degrade-wet-far",
+      "Wet at range edge",
+      0,
+      1,
+      0.05,
+      DEFAULT_DEGRADE_WET_FAR,
+    );
+  bindSlider(
+    "degrade-wet-near",
+    (value) => {
+      engine.setDegradeMix({ near: value });
+      dirty = true;
+    },
+    { hardMin: 0, hardMax: 1 },
+  );
+  bindSlider(
+    "degrade-wet-far",
+    (value) => {
+      engine.setDegradeMix({ far: value });
       dirty = true;
     },
     { hardMin: 0, hardMax: 1 },

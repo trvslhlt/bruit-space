@@ -46,6 +46,15 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
 - **Hearing range** (Listener panel, default 8) is the distance at which
   every object falls to silence (dashed ring on the map). One curve for all
   objects — a louder object is simply still audible from farther away.
+- **Degradation:** besides reverb, every object is randomly assigned one of
+  three "falling apart out there" processing chains — lo-fi digital crunch,
+  metallic interference, or a broken-speaker-style breakup — that fades in
+  with distance the same way reverb does (weak close, stronger far), but on
+  its own **Degradation panel** with its own "Wet at object"/"Wet at range
+  edge" sliders, independent of the Reverb panel's own — so degradation can
+  be dialed up to stay clearly audible even close to an object without also
+  changing how present reverb is there. Which chain an object gets is fixed
+  for its lifetime; reshuffling or loading a new folder re-rolls it.
 - **Mouse:** drag the ▲ to move the listener, drag the dot in front of it
   to turn. Drag any sound object to move it. Each object has its own
   loudness slider and mute in the Objects list.

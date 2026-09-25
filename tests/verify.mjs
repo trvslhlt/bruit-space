@@ -125,7 +125,9 @@ await page.addInitScript(() => {
   window.__filters = [];
   // Every GainNode from createGain(), in creation order. A newly placed
   // sound object creates its direct-path gain, then its reverb-send gain,
-  // then (at window 1) its player's bus -- see toneGainIndex below.
+  // then its randomly-assigned degrade chain's own gains, then its
+  // degrade dry/wet pair, then (at window 1) its player's bus -- see
+  // toneGainIndex below.
   window.__gains = [];
   const originalCreateGain = BaseAudioContext.prototype.createGain;
   BaseAudioContext.prototype.createGain = function (...args) {
@@ -238,8 +240,10 @@ const expectedDefaults = {
   "#reverb-damping": "6000",
   "#reverb-wet-near": "0.1",
   "#reverb-wet-far": "1",
+  "#degrade-wet-near": "0.3",
+  "#degrade-wet-far": "1",
   "#closed-cutoff": "300",
-  "#closed-transition": "700",
+  "#closed-transition": "1900",
   "#sample-window": "0.3",
   "#start-mode": "wander",
   "#wander-speed": "0.5",
@@ -521,11 +525,20 @@ await setSlider("sample-window", 1);
 await setSlider("rest-probability", 0);
 await page.setInputFiles("#folder-input", toneDir);
 await waitForStatus(/^1 of 1 files placed/);
-// The tone object's direct and send gains are the two gains created just
-// before its player's bus (window 1, so the player has made exactly one
-// gain). Later passes create more, which is why
-// this is captured now rather than counted from the end later.
-const toneGainIndex = (await page.evaluate(() => window.__gains.length)) - 3;
+// The tone object's direct and send gains are the first two of a fixed 15
+// gains this one addObject() call creates (window 1, so the player has
+// made exactly one gain, its bus): direct, send, its randomly-assigned
+// degrade chain's two effects (5 gains each -- 4 from that effect's own
+// createDryWet plus 1 of its own, e.g. BitcrusherEffect's outputGainNode
+// -- true of all 6 effects degradeMath.ts's 3 chains draw from, so this
+// count holds regardless of which chain this particular object drew),
+// this object's own degradeDry/degradeWet pair, then the bus. Later passes
+// create more, which is why this is captured now rather than counted from
+// the end later.
+const toneGainIndex = (await page.evaluate(() => window.__gains.length)) - 15;
+// This object's degradation crossfade -- see the group of checks below.
+const toneDegradeDryIndex = toneGainIndex + 12;
+const toneDegradeWetIndex = toneGainIndex + 13;
 await setSlider("hearing-range", 40);
 const toneId = (await canvasObjects())[0].id;
 await page
@@ -571,8 +584,12 @@ const mean = (values) => values.reduce((a, b) => a + b, 0) / values.length;
 const closedWindows = await recordWindows({ totalMs: 1200 });
 const closedLevel = mean(closedWindows.slice(1));
 
+// Waits for the *current* transition slider's value, not a hardcoded
+// guess at the default -- otherwise this silently breaks (catches the
+// object still mid-sweep, not fully open) whenever the default changes.
+const openTransitionMs = Number(await page.inputValue("#closed-transition"));
 await rowButton(toneId).click();
-await page.waitForTimeout(1000);
+await page.waitForTimeout(openTransitionMs + 300);
 const openWindows = await recordWindows({ totalMs: 1200 });
 const openLevel = mean(openWindows.slice(1));
 if (openLevel > 0.005) {
@@ -666,37 +683,121 @@ async function voiceMix() {
   await page.waitForTimeout(400);
   const readout = await page.textContent("#selected-readout");
   const distance = Number(readout.match(/([\d.]+) m away/)[1]);
-  const [direct, send] = await page.evaluate(
-    (index) => [
+  const [direct, send, degradeDry, degradeWet] = await page.evaluate(
+    ([index, degradeDryIndex, degradeWetIndex]) => [
       window.__gains[index].gain.value,
       window.__gains[index + 1].gain.value,
+      window.__gains[degradeDryIndex].gain.value,
+      window.__gains[degradeWetIndex].gain.value,
     ],
-    toneGainIndex,
+    [toneGainIndex, toneDegradeDryIndex, toneDegradeWetIndex],
   );
-  return { distance, direct, send };
+  return { distance, direct, send, degradeDry, degradeWet };
 }
-for (const [near, far] of [
-  [0, 1],
-  [0.2, 0.8],
-  [0.5, 0.5],
+// Reverb's near/far and the degrade chains' own near/far are set to
+// *different* pairs each iteration (not the same values applied to both),
+// specifically to prove the two curves are genuinely independent --
+// setReverbMix and setDegradeMix touching separate engine state -- rather
+// than merely both happening to track one shared value the way they did
+// before this split.
+for (const [[reverbNear, reverbFar], [degradeNear, degradeFar]] of [
+  [
+    [0, 1],
+    [1, 0],
+  ],
+  [
+    [0.2, 0.8],
+    [0.9, 0.1],
+  ],
+  [
+    [0.5, 0.5],
+    [0, 0.5],
+  ],
 ]) {
-  await setSlider("reverb-wet-near", near);
-  await setSlider("reverb-wet-far", far);
-  const { distance, direct, send } = await voiceMix();
+  await setSlider("reverb-wet-near", reverbNear);
+  await setSlider("reverb-wet-far", reverbFar);
+  await setSlider("degrade-wet-near", degradeNear);
+  await setSlider("degrade-wet-far", degradeFar);
+  const { distance, direct, send, degradeDry, degradeWet } = await voiceMix();
   const t = distance / 40;
-  const expectedWet = near + (far - near) * t;
+  const expectedReverbWet = reverbNear + (reverbFar - reverbNear) * t;
   const wet = send / (direct + send);
   const totalRatio = (direct + send) / ((1 - t) ** 2 * brightToneNormGain);
-  if (Math.abs(wet - expectedWet) < 0.03 && Math.abs(totalRatio - 1) < 0.03) {
+  if (
+    Math.abs(wet - expectedReverbWet) < 0.03 &&
+    Math.abs(totalRatio - 1) < 0.03
+  ) {
     ok(
-      `wet fraction ${wet.toFixed(2)} at ${distance} m with near ${near} / far ${far} (expected ${expectedWet.toFixed(2)})`,
+      `wet fraction ${wet.toFixed(2)} at ${distance} m with near ${reverbNear} / far ${reverbFar} (expected ${expectedReverbWet.toFixed(2)})`,
     );
   } else {
     fail(
-      `reverb mix off at ${distance} m, near ${near} / far ${far}: wet ${wet.toFixed(3)} (expected ${expectedWet.toFixed(3)}), total/expected ${totalRatio.toFixed(3)}`,
+      `reverb mix off at ${distance} m, near ${reverbNear} / far ${reverbFar}: wet ${wet.toFixed(3)} (expected ${expectedReverbWet.toFixed(3)}), total/expected ${totalRatio.toFixed(3)}`,
+    );
+  }
+  // The degrade chains' own dry/wet crossfade (see spatialEngine.ts's
+  // update()) follows the same shape of curve as reverb's own -- weak
+  // close, stronger far -- but its own independent near/far, set to a
+  // deliberately different value above. The pair should always sum to 1
+  // (a unity-power crossfade, not scaled by total loudness the way
+  // gain/send are).
+  const expectedDegradeWet = degradeNear + (degradeFar - degradeNear) * t;
+  const degradeWetFraction = degradeWet / (degradeDry + degradeWet);
+  const degradeSum = degradeDry + degradeWet;
+  if (
+    Math.abs(degradeWetFraction - expectedDegradeWet) < 0.03 &&
+    Math.abs(degradeSum - 1) < 0.03
+  ) {
+    ok(
+      `degrade chain wet fraction ${degradeWetFraction.toFixed(2)} at ${distance} m with its own near ${degradeNear} / far ${degradeFar} (expected ${expectedDegradeWet.toFixed(2)}, independent of reverb's ${expectedReverbWet.toFixed(2)})`,
+    );
+  } else {
+    fail(
+      `degrade chain mix off at ${distance} m, near ${degradeNear} / far ${degradeFar}: wet ${degradeWetFraction.toFixed(3)} (expected ${expectedDegradeWet.toFixed(3)}), dry+wet ${degradeSum.toFixed(3)} (expected 1)`,
     );
   }
 }
+
+// --- Which degrade chain an object gets: pure logic, no audio involved --
+// same "test the math directly via import" approach as passMath.ts below.
+const degradePicks = await page.evaluate(async () => {
+  const { pickDegradeType, DEGRADE_TYPES } = await import(
+    "/src/degradeMath.ts"
+  );
+  // A fixed, evenly-spaced sweep across [0, 1) rather than Math.random(),
+  // so this is deterministic -- exercises every type's own slice of the
+  // range exactly once each, not just "probably all 3 given enough tries".
+  const evenSweep = Array.from({ length: 12 }, (_, i) =>
+    pickDegradeType(() => i / 12),
+  );
+  // Real Math.random(), many draws, just to confirm the wiring uses it by
+  // default and actually varies (not hardcoded to always return one type).
+  const randomPicks = Array.from({ length: 60 }, () => pickDegradeType());
+  return { types: DEGRADE_TYPES, evenSweep, randomPicks };
+});
+const evenCounts = Object.fromEntries(
+  degradePicks.types.map((t) => [
+    t,
+    degradePicks.evenSweep.filter((p) => p === t).length,
+  ]),
+);
+const randomCoversAll = degradePicks.types.every((t) =>
+  degradePicks.randomPicks.includes(t),
+);
+if (
+  degradePicks.types.length === 3 &&
+  Object.values(evenCounts).every((count) => count === 4) &&
+  randomCoversAll
+) {
+  ok(
+    `degrade type picking covers all 3 types evenly (${JSON.stringify(evenCounts)}) and Math.random() draws hit all 3 in 60 tries`,
+  );
+} else {
+  fail(
+    `degrade type picking is uneven or missing a type: even-sweep counts ${JSON.stringify(evenCounts)}, random draws saw ${JSON.stringify([...new Set(degradePicks.randomPicks)])}`,
+  );
+}
+
 // --- Sample window. First the pure planning math, exactly.
 const plans = await page.evaluate(async () => {
   const { planPass, MIN_PASS_SECONDS } = await import("/src/passMath.ts");
@@ -773,11 +874,15 @@ if (overlapping)
   ok("each pass starts before the previous one ends (crossfaded, no gaps)");
 else fail("passes leave a gap between them");
 
-// Reverb off for this: phase-jumping fragments of a pure tone interfere in
-// the reverb tail, which makes the level wander for reasons unrelated to
+// Reverb and the degrade chains both off for this: phase-jumping fragments
+// of a pure tone interfere in the reverb tail, and a ring-modulation-chain
+// object's own amplitude modulation would look exactly like a spurious
+// level dip here -- both make the level wander for reasons unrelated to
 // gaps. Dry only, a dip can only come from the crossfade itself.
 await setSlider("reverb-wet-near", 0);
 await setSlider("reverb-wet-far", 0);
+await setSlider("degrade-wet-near", 0);
+await setSlider("degrade-wet-far", 0);
 const windowLevels = await recordWindows({ totalMs: 2000 });
 const sorted = [...windowLevels.slice(1, -1)].sort((a, b) => a - b);
 const median = sorted[Math.floor(sorted.length / 2)];
@@ -1119,14 +1224,14 @@ async function loadSoloTone(amplitude) {
   mkdirSync(dir, { recursive: true });
   const samples = sineSamples(1000, 1, amplitude);
   writeFileSync(path.join(dir, "tone.wav"), wavFile(samples));
-  // Window 1, no rests: exactly one addObject call, so the player's bus is
-  // the one gain created after this object's direct/send pair (see the
-  // closing-sweep scene above, same trick).
+  // Window 1, no rests: exactly one addObject call, so this object's
+  // direct gain is 15 gains back from the end (see the closing-sweep
+  // scene above, same trick and the same fixed count).
   await setSlider("sample-window", 1);
   await setSlider("rest-probability", 0);
   await page.setInputFiles("#folder-input", dir);
   await waitForStatus(/^1 of 1 files placed/);
-  const gainIndex = (await page.evaluate(() => window.__gains.length)) - 3;
+  const gainIndex = (await page.evaluate(() => window.__gains.length)) - 15;
   const id = (await canvasObjects())[0].id;
   await page
     .locator(`.object-row[data-id="${id}"] input[type="range"]`)
@@ -1294,9 +1399,37 @@ if ((await selectedIds()).length === 0 && (await selectedRowCount()) === 0) {
   );
 }
 
+// Picks the 3 most mutually-isolated of the 4 placed objects (by on-screen
+// clearance from every other object and the listener), not just
+// allIds[0..2] in whatever order they happened to sort to -- every one of
+// these three gets right-clicked at its exact screen point below, and two
+// objects landing close enough by chance (hitTestObject picks by draw
+// order, not nearest -- see its own doc comment in roomView.ts) would
+// silently make one of those clicks land on the wrong object. Same
+// reasoning as isolatedObject() above, just ranking all 4 instead of
+// picking a single best one.
+async function threeMostIsolated(ids) {
+  const list = await canvasObjects();
+  const listener = await canvasPoint("listener-px");
+  const box = await page.locator("#room-canvas").boundingBox();
+  const listenerLocal = { x: listener.x - box.x, y: listener.y - box.y };
+  const clearance = (o) =>
+    Math.min(
+      ...list
+        .filter((p) => p.id !== o.id)
+        .map((p) => Math.hypot(p.x - o.x, p.y - o.y)),
+      Math.hypot(listenerLocal.x - o.x, listenerLocal.y - o.y),
+    );
+  return list
+    .filter((o) => ids.includes(o.id))
+    .sort((a, b) => clearance(b) - clearance(a))
+    .slice(0, 3)
+    .map((o) => o.id);
+}
+
 // A plain click on one object still selects just that one (marquee support
 // hasn't changed the ordinary single-select gesture).
-const [firstId, secondId, thirdId] = allIds;
+const [firstId, secondId, thirdId] = await threeMostIsolated(allIds);
 await page.click(`.object-row[data-id="${firstId}"] .object-name`);
 if ((await selectedRowCount()) === 1) {
   ok("a plain click still selects a single object");
