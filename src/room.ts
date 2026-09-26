@@ -7,6 +7,13 @@ export interface Listener {
   heading: number;
 }
 
+/** advanceDrift()'s own wander target -- see motionMath.ts. Kept on the
+ * object (not motionMath's problem to store) since it has to persist
+ * across frames the same way heading/speed do. */
+export interface DriftState {
+  targetHeading: number;
+}
+
 export interface SoundObject {
   id: number;
   name: string;
@@ -19,6 +26,15 @@ export interface SoundObject {
   /** Closed muffles the object with a lowpass; open is the unfiltered
    * sound. See SpatialEngine.setObjectClosed. */
   closed: boolean;
+  /** Own heading (radians, same "clockwise from up" convention as
+   * Listener.heading) and speed (m/s) for self-propelled motion -- see
+   * motionMath.ts. Always present and valid even while the room's motion
+   * mode is "none", so turning motion on has something sane to move from
+   * immediately. Motion mode/boundary/speed-range themselves aren't here:
+   * they're one shared room-wide config, not a per-object fact. */
+  heading: number;
+  speed: number;
+  drift: DriftState;
 }
 
 export interface RoomState {

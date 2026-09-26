@@ -29,6 +29,8 @@ const ROLLOFF_EXPONENT = 2;
 // moves between animation frames.
 const SMOOTHING_SECONDS = 0.03;
 
+const NO_WRAPPED_IDS: ReadonlySet<number> = new Set();
+
 export const DEFAULT_MASTER_LEVEL = 0.9;
 export const DEFAULT_WET_NEAR = 0.1;
 export const DEFAULT_WET_FAR = 1;
@@ -335,8 +337,13 @@ export class SpatialEngine {
   }
 
   /** Pushes the current listener/object state into the audio graph. Cheap
-   * enough to call every frame something moved. */
-  update(room: RoomState): void {
+   * enough to call every frame something moved. `wrappedIds` are objects
+   * whose position was teleported (not smoothly moved) this frame by a
+   * "wrap" motion boundary -- see the panner snap below. */
+  update(
+    room: RoomState,
+    wrappedIds: ReadonlySet<number> = NO_WRAPPED_IDS,
+  ): void {
     const now = this.audioContext.currentTime;
     const smooth = (param: AudioParam, value: number): void => {
       param.setTargetAtTime(value, now, SMOOTHING_SECONDS);
@@ -382,8 +389,19 @@ export class SpatialEngine {
       );
       smooth(voice.degradeDry.gain, 1 - degradeWet);
       smooth(voice.degradeWet.gain, degradeWet);
-      smooth(voice.panner.positionX, object.x);
-      smooth(voice.panner.positionZ, object.y);
+      if (wrappedIds.has(object.id)) {
+        // A wrap boundary teleports the object instantly (e.g. x: 19.9 ->
+        // 0.1). smooth()'s setTargetAtTime would otherwise glide the
+        // panner across the whole room over a couple SMOOTHING_SECONDS --
+        // an audible "zip" where an instant cut belongs. setValueAtTime
+        // snaps it exactly this one frame; every later frame's ordinary
+        // smooth() call glides on from the new position as usual.
+        voice.panner.positionX.setValueAtTime(object.x, now);
+        voice.panner.positionZ.setValueAtTime(object.y, now);
+      } else {
+        smooth(voice.panner.positionX, object.x);
+        smooth(voice.panner.positionZ, object.y);
+      }
     }
   }
 }

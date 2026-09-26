@@ -132,6 +132,19 @@ export class RoomView {
     return 6 + 8 * object.gain;
   }
 
+  private static readonly NO_DRAGGED_IDS: ReadonlySet<number> = new Set();
+
+  /** Every object id currently being repositioned by an in-progress drag
+   * (a lone object, or every member of a multi-selection group-drag) --
+   * main.ts's frame() uses this so per-object motion can pause for
+   * exactly the objects the user is holding, without this file knowing
+   * anything about motion. */
+  draggedObjectIds(): ReadonlySet<number> {
+    if (this.drag?.kind === "object") return new Set([this.drag.id]);
+    if (this.drag?.kind === "group") return new Set(this.drag.ids);
+    return RoomView.NO_DRAGGED_IDS;
+  }
+
   private pointerPosition(event: MouseEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };

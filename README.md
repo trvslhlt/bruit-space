@@ -43,6 +43,23 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   `Q`/`E` turn. They combine, so `W`+`E` walks in a curve. **Walk speed
   (m/s)** and **Turn speed (deg/s)**, in the Listener panel, set how fast —
   mouse dragging is a direct 1:1 pointer move and isn't affected by either.
+- **Layout** (Room panel, default Random) places every object: **Random**
+  scatters them (the original behavior, still keeping each one a minimum
+  distance from the listener's start), **Grid** lays them out evenly in
+  rows/columns, **Circle** spaces them evenly around the room's centre.
+  Switching it repositions the current objects immediately, no reshuffle
+  needed.
+- **Motion** (its own panel, default None) lets objects wander on their
+  own. **Drift** gently curves each object's own heading over time;
+  **Linear** holds a constant heading until it meets a wall; **Vertical**
+  is Linear restricted to straight up/down, each object picking one at
+  random. **Boundary**
+  picks what happens there: **Bounce** reflects it back in, **Wrap**
+  teleports it to the opposite edge. **Min/max speed (m/s)** set the
+  range each object's own (randomly chosen, so they don't move in
+  lockstep) speed is drawn from and clamped into if you narrow the range
+  later. Dragging a moving object pauses its motion for the drag and
+  resumes it from wherever you drop it.
 - **Hearing range** (Listener panel, default 8) is the distance at which
   every object falls to silence (dashed ring on the map). One curve for all
   objects — a louder object is simply still audible from farther away.

@@ -136,3 +136,15 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
   transition (300 Hz, 1900 ms), and now loudness normalization -- it can
   raise a quiet object's level up to 4x (+12 dB), which combined with the
   existing master-level concern is more headroom pressure to listen for.
+- **Worklet files aren't actually in git.** `public/worklets/*.js` is
+  gitignored, so both `pcm-recorder-processor.js` and (added for the
+  degrade chains' `lofi` type) `sample-rate-reducer-processor.js` sit in
+  the working tree uncommitted, with no Dockerfile/Makefile step that
+  copies them in from bruit-kit automatically. Works today because
+  they've been manually copied into this checkout, but a fresh `git
+  clone` -- or a fresh Docker image build from a clean checkout -- would
+  be missing both and fail wherever they're preloaded. Fix: either commit
+  them despite the gitignore rule, or add a real copy step (e.g. a
+  Dockerfile stage that copies each from `../bruit-kit/src/audio/` the
+  same way the `bruit-kit-dist` stage already pulls in bruit-kit's
+  compiled output) so a fresh checkout works without a manual step.

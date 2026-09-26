@@ -2,6 +2,24 @@ import { distanceGain } from "bruit-kit/audio";
 import { bindSlider, rangeControl } from "bruit-kit/ui";
 import { unlockAudioContext } from "./audioContext";
 import { createKeyboardControls } from "./keyboard";
+import {
+  DEFAULT_LAYOUT_MODE,
+  type LayoutMode,
+  circlePosition,
+  gridPosition,
+} from "./layoutMath";
+import {
+  DEFAULT_MAX_SPEED,
+  DEFAULT_MIN_SPEED,
+  DEFAULT_MOTION_BOUNDARY,
+  DEFAULT_MOTION_MODE,
+  type MotionBoundary,
+  type MotionConfig,
+  type MotionMode,
+  clampSpeedToRange,
+  randomMotionState,
+  stepMotion,
+} from "./motionMath";
 import { openObjectContextMenu } from "./objectContextMenu";
 import {
   DEFAULT_LISTENER_SPEED,
@@ -59,9 +77,16 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
   let dirty = true;
 
   const roomControlsEl = query("#room-controls");
-  roomControlsEl.innerHTML =
-    rangeControl("room-width", "Width (m)", 4, 40, 1, room.width) +
-    rangeControl("room-height", "Height (m)", 4, 40, 1, room.height);
+  roomControlsEl.innerHTML = `${rangeControl("room-width", "Width (m)", 4, 40, 1, room.width)}
+    ${rangeControl("room-height", "Height (m)", 4, 40, 1, room.height)}
+    <label>
+      <span class="control-name">Layout</span>
+      <select id="layout-mode">
+        <option value="random">Random</option>
+        <option value="grid">Grid</option>
+        <option value="circle">Circle</option>
+      </select>
+    </label>`;
 
   // Shrinking the room must not strand the listener or an object outside
   // it, where they'd be undraggable and unreachable.
@@ -130,6 +155,89 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       turnRate = (degreesPerSecond * Math.PI) / 180;
     },
     { hardMin: 10, hardMax: 360 },
+  );
+
+  query("#motion-controls").innerHTML = `
+    <label>
+      <span class="control-name">Mode</span>
+      <select id="motion-mode">
+        <option value="none">None</option>
+        <option value="drift">Drift</option>
+        <option value="linear">Linear</option>
+        <option value="vertical">Vertical</option>
+      </select>
+    </label>
+    <label>
+      <span class="control-name">Boundary</span>
+      <select id="motion-boundary">
+        <option value="bounce">Bounce</option>
+        <option value="wrap">Wrap</option>
+      </select>
+    </label>
+    ${rangeControl("motion-min-speed", "Min speed (m/s)", 0, 5, 0.1, DEFAULT_MIN_SPEED)}
+    ${rangeControl("motion-max-speed", "Max speed (m/s)", 0, 5, 0.1, DEFAULT_MAX_SPEED)}`;
+
+  let layoutMode: LayoutMode = DEFAULT_LAYOUT_MODE;
+  let motionConfig: MotionConfig = {
+    mode: DEFAULT_MOTION_MODE,
+    boundary: DEFAULT_MOTION_BOUNDARY,
+    minSpeed: DEFAULT_MIN_SPEED,
+    maxSpeed: DEFAULT_MAX_SPEED,
+  };
+
+  const layoutModeSelect = query<HTMLSelectElement>("#layout-mode");
+  layoutModeSelect.value = layoutMode;
+  layoutModeSelect.addEventListener("change", () => {
+    layoutMode = layoutModeSelect.value as LayoutMode;
+    repositionObjects();
+  });
+
+  const motionModeSelect = query<HTMLSelectElement>("#motion-mode");
+  const motionBoundarySelect = query<HTMLSelectElement>("#motion-boundary");
+  motionModeSelect.value = motionConfig.mode;
+  motionBoundarySelect.value = motionConfig.boundary;
+  motionModeSelect.addEventListener("change", () => {
+    motionConfig = {
+      ...motionConfig,
+      mode: motionModeSelect.value as MotionMode,
+    };
+  });
+  motionBoundarySelect.addEventListener("change", () => {
+    motionConfig = {
+      ...motionConfig,
+      boundary: motionBoundarySelect.value as MotionBoundary,
+    };
+  });
+  // Rather than re-rolling every object's pace from scratch, an existing
+  // speed is just pulled back inside the new range -- so nudging Max
+  // speed down doesn't jolt a slow-moving object's speed back up to it.
+  bindSlider(
+    "motion-min-speed",
+    (value) => {
+      motionConfig = { ...motionConfig, minSpeed: value };
+      for (const object of room.objects) {
+        object.speed = clampSpeedToRange(
+          object.speed,
+          motionConfig.minSpeed,
+          motionConfig.maxSpeed,
+        );
+      }
+    },
+    { hardMin: 0 },
+  );
+  bindSlider(
+    "motion-max-speed",
+    (value) => {
+      motionConfig = { ...motionConfig, maxSpeed: value };
+      for (const object of room.objects) {
+        object.speed = clampSpeedToRange(
+          object.speed,
+          motionConfig.minSpeed,
+          motionConfig.maxSpeed,
+        );
+      }
+    },
+    { hardMin: 0 },
   );
 
   query("#reverb-controls").innerHTML =
@@ -504,6 +612,27 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
   let loadToken = 0;
   let nextObjectId = 1;
 
+  /** Places every current object according to `layoutMode` -- shared by
+   * populate() (placing freshly decoded objects, once every one of them
+   * exists, since grid/circle need the final count) and the Layout
+   * select's change handler (repositioning objects already on the floor,
+   * immediately, without waiting for Reshuffle). Touches only x/y; an
+   * object's own heading/speed/drift are left untouched, so switching
+   * layouts mid-drift doesn't reset anyone's motion. */
+  function repositionObjects(): void {
+    const { objects } = room;
+    objects.forEach((object, index) => {
+      const position =
+        layoutMode === "grid"
+          ? gridPosition(index, objects.length, room.width, room.height)
+          : layoutMode === "circle"
+            ? circlePosition(index, objects.length, room.width, room.height)
+            : randomObjectPosition(room, MIN_SPAWN_DISTANCE_FROM_LISTENER);
+      Object.assign(object, position);
+    });
+    dirty = true;
+  }
+
   async function populate(): Promise<void> {
     if (allFiles.length === 0) return;
     // A newer populate() (reshuffle, or a changed cap) supersedes any
@@ -539,7 +668,13 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       const object = {
         id: nextObjectId++,
         name,
-        ...randomObjectPosition(room, MIN_SPAWN_DISTANCE_FROM_LISTENER),
+        x: 0,
+        y: 0, // placed below, once every object exists (grid/circle need the count)
+        ...randomMotionState(
+          motionConfig.minSpeed,
+          motionConfig.maxSpeed,
+          motionConfig.mode,
+        ),
         gain: 0.3 + Math.random() * 0.5,
         muted: false,
         closed: true,
@@ -547,6 +682,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       room.objects.push(object);
       engine.addObject(object.id, buffer, object.closed);
     }
+    repositionObjects();
     renderObjectList();
     reshuffleButton.disabled = false;
     dirty = true;
@@ -630,6 +766,26 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
   const keys = createKeyboardControls();
   let lastFrame = performance.now();
 
+  /** Advances every object's own motion by one frame, skipping whichever
+   * ids the user is currently dragging -- pausing their motion for the
+   * duration of the drag rather than fighting the cursor -- and returns
+   * the ids that wrapped this frame, for engine.update() to snap instead
+   * of smoothly glide. */
+  function stepObjectMotion(dt: number): ReadonlySet<number> {
+    const wrappedIds = new Set<number>();
+    if (motionConfig.mode === "none") return wrappedIds;
+    const dragging = view.draggedObjectIds();
+    for (const object of room.objects) {
+      if (dragging.has(object.id)) continue;
+      const result = stepMotion(object, motionConfig, object.speed, room, dt);
+      Object.assign(object, clampToRoom(room, result.x, result.y));
+      object.heading = result.heading;
+      object.drift = result.drift;
+      if (result.wrapped) wrappedIds.add(object.id);
+    }
+    return wrappedIds;
+  }
+
   function frame(now: number): void {
     const dt = Math.min((now - lastFrame) / 1000, 0.1);
     lastFrame = now;
@@ -655,9 +811,14 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
       dirty = true;
     }
 
-    if (dirty) {
+    const wrappedIds = stepObjectMotion(dt);
+
+    // Active motion needs a redraw every frame, not just when something
+    // else set `dirty` -- but when motion is "none" this stays exactly
+    // the original one-shot-per-change behavior.
+    if (dirty || motionConfig.mode !== "none") {
       dirty = false;
-      engine.update(room);
+      engine.update(room, wrappedIds);
       view.draw();
       refreshReadouts();
     }

@@ -232,6 +232,11 @@ ok("page loads and audio unlocks");
 const expectedDefaults = {
   "#room-width": "20",
   "#room-height": "20",
+  "#layout-mode": "random",
+  "#motion-mode": "none",
+  "#motion-boundary": "bounce",
+  "#motion-min-speed": "0.3",
+  "#motion-max-speed": "1",
   "#hearing-range": "8",
   "#walk-speed": "2",
   "#turn-speed": "90",
@@ -1678,6 +1683,142 @@ if (
     `expected a toggle from "${beforeToggle}" and the selection to stay at 4, got "${afterToggle}", ${(await selectedIds()).length} selected`,
   );
 }
+
+// --- Layout modes reposition the current objects immediately, not just
+// on the next Reshuffle.
+async function checkLayoutMoves(mode) {
+  const before = await canvasObjects();
+  await page.selectOption("#layout-mode", mode);
+  await page.waitForTimeout(100);
+  const after = await canvasObjects();
+  const moved = after.every((o) => {
+    const from = before.find((b) => b.id === o.id);
+    return Math.hypot(o.x - from.x, o.y - from.y) > 1;
+  });
+  if (moved) {
+    ok(`switching Layout to ${mode} repositions every object immediately`);
+  } else {
+    fail(`${mode} layout should have moved every object`);
+  }
+}
+await checkLayoutMoves("grid");
+await checkLayoutMoves("circle");
+await page.selectOption("#layout-mode", "random");
+await page.waitForTimeout(100);
+
+// --- Motion "none" (the default) leaves positions untouched over time.
+const beforeIdle = await canvasObjects();
+await page.waitForTimeout(500);
+const afterIdle = await canvasObjects();
+if (JSON.stringify(afterIdle) === JSON.stringify(beforeIdle)) {
+  ok('motion mode "none" leaves object positions unchanged over time');
+} else {
+  fail("objects should not move while motion mode is none");
+}
+
+// --- Drift/linear/vertical x bounce/wrap: smoke-run each combination
+// briefly, checking every object actually moves and stays inside the
+// room rect -- the real "doesn't throw" coverage is the console/page-
+// error listeners set up at the top of this file, checked at the very
+// end of the script. Speed raised well above the defaults so 1.5s is
+// plenty of travel to measure regardless of the room's on-screen scale.
+await setSlider("motion-min-speed", 3);
+await setSlider("motion-max-speed", 5);
+for (const mode of ["drift", "linear", "vertical"]) {
+  await page.selectOption("#motion-mode", mode);
+  for (const boundary of ["bounce", "wrap"]) {
+    await page.selectOption("#motion-boundary", boundary);
+    const before = await canvasObjects();
+    await page.waitForTimeout(1500);
+    const after = await canvasObjects();
+    const moved = after.every((o) => {
+      const from = before.find((b) => b.id === o.id);
+      return Math.hypot(o.x - from.x, o.y - from.y) > 0.5;
+    });
+    const inBounds = after.every(
+      (o) =>
+        o.x >= rx - 1 &&
+        o.x <= rx + rw + 1 &&
+        o.y >= ry - 1 &&
+        o.y <= ry + rh + 1,
+    );
+    if (moved && inBounds) {
+      ok(
+        `motion "${mode}" with "${boundary}" boundary moves every object and keeps it inside the room`,
+      );
+    } else {
+      fail(
+        `motion "${mode}"/"${boundary}" failed: moved=${moved} inBounds=${inBounds}`,
+      );
+    }
+    if (mode === "vertical") {
+      const xUnchanged = after.every((o) => {
+        const from = before.find((b) => b.id === o.id);
+        return Math.abs(o.x - from.x) < 0.5;
+      });
+      if (xUnchanged) {
+        ok(`vertical motion with "${boundary}" boundary leaves x unchanged`);
+      } else {
+        fail(
+          `vertical motion should only move in y, x changed: ${JSON.stringify(
+            after.map((o) => o.x),
+          )} vs ${JSON.stringify(before.map((o) => o.x))}`,
+        );
+      }
+    }
+  }
+}
+
+// --- Dragging an object pauses its own motion for the drag; it resumes
+// from the drop point after release.
+await page.selectOption("#motion-mode", "drift");
+await page.selectOption("#motion-boundary", "bounce");
+const dragTarget = (await canvasObjects())[0];
+const dragPoint = await objectScreenPoint(dragTarget.id);
+// Toward the room's centre, same reasoning as the earlier single-object
+// drag test -- an object already near a wall would clamp this drag and
+// make the "held exactly at the drop point" comparison below unreliable.
+const pauseDx = dragTarget.x < rx + rw / 2 ? 25 : -25;
+const pauseDy = dragTarget.y < ry + rh / 2 ? 25 : -25;
+await page.mouse.move(dragPoint.x, dragPoint.y);
+await page.mouse.down();
+// Read fresh right after grabbing, not the pre-drag dragTarget above --
+// with drift active the object has already moved somewhat by the time
+// the drag actually starts, so that's the wrong baseline for an exact
+// "held still under the cursor" comparison.
+const grabbedAt = (await canvasObjects()).find((o) => o.id === dragTarget.id);
+await page.mouse.move(dragPoint.x + pauseDx, dragPoint.y + pauseDy, {
+  steps: 5,
+});
+await page.waitForTimeout(400);
+const midDrag = (await canvasObjects()).find((o) => o.id === dragTarget.id);
+const heldAtDropPoint =
+  Math.abs(midDrag.x - (grabbedAt.x + pauseDx)) < 3 &&
+  Math.abs(midDrag.y - (grabbedAt.y + pauseDy)) < 3;
+if (heldAtDropPoint) {
+  ok("dragging an object under active drift holds it exactly at the cursor");
+} else {
+  fail(
+    `dragged object should hold still under the cursor, drifted to ${JSON.stringify(midDrag)} instead of ~(${grabbedAt.x + pauseDx}, ${grabbedAt.y + pauseDy})`,
+  );
+}
+await page.mouse.up();
+await page.waitForTimeout(500);
+const afterRelease = (await canvasObjects()).find(
+  (o) => o.id === dragTarget.id,
+);
+if (Math.hypot(afterRelease.x - midDrag.x, afterRelease.y - midDrag.y) > 0.5) {
+  ok("releasing the drag resumes the object's own motion from the drop point");
+} else {
+  fail("object should keep drifting after the drag ends");
+}
+
+// Every motion/layout control back to its shipped default, so nothing
+// below is affected by objects still moving.
+await page.selectOption("#motion-mode", "none");
+await page.selectOption("#motion-boundary", "bounce");
+await setSlider("motion-min-speed", 0.3);
+await setSlider("motion-max-speed", 1);
 
 // Regression: the menu's Loudness slider used to wire itself up via
 // requestAnimationFrame, on the mistaken assumption that innerHTML needs a
