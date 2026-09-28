@@ -4,8 +4,9 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "predev": "mkdir -p public/worklets && cp node_modules/bruit-kit/dist/audio/pcm-recorder-processor.js public/worklets/",
-    "prebuild": "mkdir -p public/worklets && cp node_modules/bruit-kit/dist/audio/pcm-recorder-processor.js public/worklets/",
+    "sync-worklets": "mkdir -p public/worklets && cp node_modules/bruit-kit/dist/audio/pcm-recorder-processor.js node_modules/bruit-kit/dist/audio/sample-rate-reducer-processor.js public/worklets/",
+    "predev": "npm run sync-worklets",
+    "prebuild": "npm run sync-worklets",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
