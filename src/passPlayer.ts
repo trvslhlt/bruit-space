@@ -4,7 +4,9 @@ import {
   advanceWander,
   initialWanderState,
   planPass,
+  planPitch,
   planRest,
+  semitonesToRate,
 } from "./passMath";
 
 // Scheduled this far ahead, because timers in a background tab can be
@@ -21,6 +23,11 @@ const FADE_SECONDS = 0.03;
 // its sources are stopped a little after it's inaudible.
 const RETIRE_TIME_CONSTANT = 0.01;
 const RETIRE_SECONDS = 0.08;
+
+// Drift is a wander (see passMath.ts) of the pitch, paced by this fixed
+// speed: slow enough to read as the pitch slowly wandering rather than
+// jittering, and not worth a slider of its own next to the depth.
+const PITCH_DRIFT_SPEED = 0.6;
 
 const CURVE_POINTS = 32;
 // Equal-power: for unrelated material, sin^2 + cos^2 = 1 keeps the level
@@ -42,14 +49,22 @@ export interface PassConfig {
   restProbability: number;
   /** Longest rest, in milliseconds; each one is random up to this. */
   restMaxMs: number;
+  /** Each pass is shifted by a fresh random amount up to this many
+   * semitones either way. */
+  pitchOffset: number;
+  /** A slow wander of the pitch across passes, up to this many semitones
+   * either way, on top of the per-pass offset. */
+  pitchDrift: number;
 }
 
-/** Window 1 with no rests is a plain native loop. Anything else is a chain
- * of passes -- including window 1 once rests are on, as full-length passes,
- * because a native loop has no end-of-loop to rest after. */
+/** Window 1 with no rests and no pitch variation is a plain native loop.
+ * Anything else is a chain of passes -- including window 1 once rests or
+ * pitch variation are on, as full-length passes, because a native loop has
+ * no end-of-loop to rest after and no per-pass boundary to re-pitch at. */
 function playsNativeLoop(config: PassConfig): boolean {
   const resting = config.restProbability > 0 && config.restMaxMs > 0;
-  return config.windowFraction >= 1 && !resting;
+  const varyingPitch = config.pitchOffset > 0 || config.pitchDrift > 0;
+  return config.windowFraction >= 1 && !resting && !varyingPitch;
 }
 
 /** Plays one sample into `destination`. At window 1 that's a plain native
@@ -64,6 +79,7 @@ export class PassPlayer {
   // Kept for the player's whole life, not reset when the window changes,
   // so a wander carries on from where it was rather than starting over.
   private wander: WanderState = initialWanderState();
+  private pitchWander: WanderState = initialWanderState();
 
   constructor(
     private audioContext: AudioContext,
@@ -77,9 +93,10 @@ export class PassPlayer {
   /** A changed window or start mode re-rolls immediately: whatever's
    * playing fades out and a fresh set of passes starts. Waiting for the
    * current pass to finish would mean up to a whole sample's length of
-   * lag. So does turning rests on or off at window 1, which switches
-   * between a native loop and passes. A changed wander speed or rest
-   * setting otherwise just applies from the next pass. */
+   * lag. So does turning rests or pitch variation on or off at window 1,
+   * which switches between a native loop and passes. A changed wander
+   * speed, rest or pitch setting otherwise just applies from the next
+   * pass. */
   configure(next: PassConfig): void {
     const reroll =
       next.windowFraction !== this.config.windowFraction ||
@@ -143,16 +160,33 @@ export class PassPlayer {
       this.config.windowFraction,
       startFraction,
     );
+    // `length` is in sample time; a faster rate gets through it sooner, so
+    // everything scheduled around the pass runs on how long it really
+    // lasts. start()'s duration below stays in sample time.
+    const rate = semitonesToRate(
+      planPitch(
+        this.config.pitchOffset,
+        this.config.pitchDrift,
+        this.pitchWander.position,
+      ),
+    );
+    this.pitchWander = advanceWander(this.pitchWander, PITCH_DRIFT_SPEED);
+    const playSeconds = length / rate;
     // Under half the pass each, so the two curves never touch (adjacent
     // value-curve events on one param aren't allowed to overlap).
-    const fade = Math.min(FADE_SECONDS, length * 0.45);
+    const fade = Math.min(FADE_SECONDS, playSeconds * 0.45);
 
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
+    source.playbackRate.value = rate;
     const gain = audioContext.createGain();
     gain.gain.value = 0;
     gain.gain.setValueCurveAtTime(FADE_IN, startTime, fade);
-    gain.gain.setValueCurveAtTime(FADE_OUT, startTime + length - fade, fade);
+    gain.gain.setValueCurveAtTime(
+      FADE_OUT,
+      startTime + playSeconds - fade,
+      fade,
+    );
     source.connect(gain).connect(this.bus!);
     source.start(startTime, offset, length);
     this.track(source);
@@ -166,7 +200,9 @@ export class PassPlayer {
       this.config.restMaxMs / 1000,
     );
     this.nextStartTime =
-      rest > 0 ? startTime + length + rest : startTime + length - fade;
+      rest > 0
+        ? startTime + playSeconds + rest
+        : startTime + playSeconds - fade;
   }
 
   private retire(): void {

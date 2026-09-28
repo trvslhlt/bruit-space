@@ -111,6 +111,14 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   one, the pass fades out, the rest passes, and the next fades in. At window 1
   a plain loop has no end-of-loop to rest after, so turning rests on makes it
   a chain of full-length passes (turn them off and it's a native loop again).
+- **Pitch offset (st)** (default 1) shifts each pass by a fresh random
+  amount up to that many semitones either way, so the same sample sounds
+  different every time it comes round. **Pitch drift (st)** (default 0.5)
+  adds a slow wander on top: the pitch glides toward a random target across
+  passes (up to that many semitones either way) and picks a new one on
+  arrival. Both are changes of playback rate, so a raised pass is also
+  shorter. They apply from the next pass, and at window 1 turning either on
+  makes the loop a chain of full-length passes, like rests do.
 - **Sample window** (Playback panel, default 0.3) is the share of each sample
   played per pass. At 0.9 each pass plays 90% of the sample from a random
   start between 0% and 10% of the way in, then the next pass begins,

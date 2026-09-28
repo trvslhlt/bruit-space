@@ -38,6 +38,8 @@ import {
   DEFAULT_DEGRADE_WET_FAR,
   DEFAULT_DEGRADE_WET_NEAR,
   DEFAULT_MASTER_LEVEL,
+  DEFAULT_PITCH_DRIFT,
+  DEFAULT_PITCH_OFFSET,
   DEFAULT_REST_MAX_MS,
   DEFAULT_REST_PROBABILITY,
   DEFAULT_SAMPLE_WINDOW,
@@ -376,6 +378,22 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     50,
     DEFAULT_REST_MAX_MS,
   );
+  const pitchOffsetControl = rangeControl(
+    "pitch-offset",
+    "Pitch offset (st)",
+    0,
+    12,
+    0.5,
+    DEFAULT_PITCH_OFFSET,
+  );
+  const pitchDriftControl = rangeControl(
+    "pitch-drift",
+    "Pitch drift (st)",
+    0,
+    6,
+    0.1,
+    DEFAULT_PITCH_DRIFT,
+  );
   query("#playback-controls").innerHTML = `${sampleWindowControl}
     <label>
       <span class="control-name">Start mode</span>
@@ -386,7 +404,9 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     </label>
     ${wanderSpeedControl}
     ${restProbabilityControl}
-    ${restDurationControl}`;
+    ${restDurationControl}
+    ${pitchOffsetControl}
+    ${pitchDriftControl}`;
   bindSlider(
     "sample-window",
     (value) => {
@@ -413,6 +433,21 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     "rest-duration",
     (value) => {
       engine.setPlayback({ restMaxMs: value });
+    },
+    { hardMin: 0 },
+  );
+
+  bindSlider(
+    "pitch-offset",
+    (value) => {
+      engine.setPlayback({ pitchOffset: value });
+    },
+    { hardMin: 0 },
+  );
+  bindSlider(
+    "pitch-drift",
+    (value) => {
+      engine.setPlayback({ pitchDrift: value });
     },
     { hardMin: 0 },
   );

@@ -46,6 +46,8 @@ export const DEFAULT_START_MODE: StartMode = "wander";
 export const DEFAULT_WANDER_SPEED = 0.5;
 export const DEFAULT_REST_PROBABILITY = 0.1;
 export const DEFAULT_REST_MAX_MS = 650;
+export const DEFAULT_PITCH_OFFSET = 1;
+export const DEFAULT_PITCH_DRIFT = 0.5;
 
 const SCHEDULE_INTERVAL_MS = 250;
 // A slider drag fires many input events; each window or start-mode change
@@ -102,6 +104,8 @@ export class SpatialEngine {
     wanderSpeed: DEFAULT_WANDER_SPEED,
     restProbability: DEFAULT_REST_PROBABILITY,
     restMaxMs: DEFAULT_REST_MAX_MS,
+    pitchOffset: DEFAULT_PITCH_OFFSET,
+    pitchDrift: DEFAULT_PITCH_DRIFT,
   };
   private playbackTimer: number | undefined;
 
@@ -226,7 +230,8 @@ export class SpatialEngine {
 
   /** Share of each sample played per pass (1 = the whole sample, looped),
    * how each pass picks its start, how fast a wander drifts, and how often
-   * and how long the rests between passes are. Applied to every object
+   * and how long the rests between passes are, and how far each pass's
+   * pitch is offset and drifts. Applied to every object
    * once the values stop changing. */
   setPlayback(change: Partial<PassConfig>): void {
     this.playback = { ...this.playback, ...change };

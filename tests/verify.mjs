@@ -212,6 +212,7 @@ await page.addInitScript(() => {
       args,
       loop: this.loop,
       bufferDuration: this.buffer?.duration,
+      rate: this.playbackRate.value,
     });
     return originalStart.apply(this, args);
   };
@@ -254,6 +255,8 @@ const expectedDefaults = {
   "#wander-speed": "0.5",
   "#rest-probability": "0.1",
   "#rest-duration": "650",
+  "#pitch-offset": "1",
+  "#pitch-drift": "0.5",
   "#master-level": "0.9",
 };
 const wrongDefaults = [];
@@ -528,6 +531,8 @@ writeFileSync(path.join(toneDir, "bright.wav"), wavFile(sineSamples(3000)));
 // can't count on.
 await setSlider("sample-window", 1);
 await setSlider("rest-probability", 0);
+await setSlider("pitch-offset", 0);
+await setSlider("pitch-drift", 0);
 await page.setInputFiles("#folder-input", toneDir);
 await waitForStatus(/^1 of 1 files placed/);
 // The tone object's direct and send gains are the first two of a fixed 15
@@ -842,6 +847,8 @@ await page.waitForTimeout(2000);
 // Rests off and random starts, whatever the defaults are, so the overlap
 // and distinct-start checks below mean what they say.
 await setSlider("rest-probability", 0);
+await setSlider("pitch-offset", 0);
+await setSlider("pitch-drift", 0);
 await page.selectOption("#start-mode", "random");
 const startsBefore = await page.evaluate(() => window.__starts.length);
 await setSlider("sample-window", 0.5);
@@ -1181,6 +1188,149 @@ if (backToLoop.newStarts === 0 && backToLoop.lastIsLoop) {
   fail(`should be a native loop again: ${JSON.stringify(backToLoop)}`);
 }
 
+// --- Pitch offset and drift. Pure math first, exactly.
+const pitchMath = await page.evaluate(async () => {
+  const { planPitch, semitonesToRate, advanceWander, initialWanderState } =
+    await import("/src/passMath.ts");
+  let state = initialWanderState(0.5, 0.5);
+  let lowest = Number.POSITIVE_INFINITY;
+  let highest = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < 5000; i++) {
+    const semitones = planPitch(0, 3, state.position);
+    lowest = Math.min(lowest, semitones);
+    highest = Math.max(highest, semitones);
+    state = advanceWander(state, 0.3);
+  }
+  return {
+    octaveUp: semitonesToRate(12),
+    octaveDown: semitonesToRate(-12),
+    unison: semitonesToRate(0),
+    offsetLow: planPitch(4, 0, 0.5, 0),
+    offsetHigh: planPitch(4, 0, 0.5, 1),
+    offsetOff: planPitch(0, 0, 0.5, 0.9),
+    driftLow: planPitch(0, 2, 0),
+    driftHigh: planPitch(0, 2, 1),
+    summed: planPitch(4, 2, 1, 1),
+    lowest,
+    highest,
+  };
+});
+if (
+  near(pitchMath.octaveUp, 2) &&
+  near(pitchMath.octaveDown, 0.5) &&
+  near(pitchMath.unison, 1) &&
+  near(pitchMath.offsetLow, -4) &&
+  near(pitchMath.offsetHigh, 4) &&
+  near(pitchMath.offsetOff, 0) &&
+  near(pitchMath.driftLow, -2) &&
+  near(pitchMath.driftHigh, 2) &&
+  near(pitchMath.summed, 6) &&
+  pitchMath.lowest >= -3 &&
+  pitchMath.highest <= 3 &&
+  pitchMath.highest - pitchMath.lowest > 1
+) {
+  ok(
+    "pitch planning: 12 semitones is a doubled rate, offset and drift are each bounded and add, drift wanders within its depth",
+  );
+} else {
+  fail(`bad pitch math: ${JSON.stringify(pitchMath)}`);
+}
+
+// Then what the app schedules: window 0.5, no rests, offset only. The rate
+// of each pass must sit inside +/-6 semitones and vary between passes.
+await setSlider("sample-window", 0.5);
+await page.selectOption("#start-mode", "random");
+await setSlider("pitch-offset", 6);
+await page.waitForTimeout(700);
+const offsetMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(4500);
+const offsetRates = (
+  await page.evaluate((from) => window.__starts.slice(from), offsetMark)
+)
+  .filter((entry) => entry.args.length === 3 && !entry.loop)
+  .map((entry) => entry.rate);
+const inOffsetRange = offsetRates.every(
+  (rate) => rate >= 2 ** (-6 / 12) - 1e-3 && rate <= 2 ** (6 / 12) + 1e-3,
+);
+if (
+  offsetRates.length >= 5 &&
+  inOffsetRange &&
+  new Set(offsetRates.map((rate) => rate.toFixed(3))).size >= 4
+) {
+  ok(
+    `pitch offset 6: ${offsetRates.length} passes, rates ${Math.min(...offsetRates).toFixed(2)}..${Math.max(...offsetRates).toFixed(2)}, all within +/-6 semitones and varying`,
+  );
+} else {
+  fail(`bad offset rates: ${offsetRates.map((r) => r.toFixed(3)).join(" ")}`);
+}
+
+// Drift only: the rate moves, but by small steps, and stays within depth.
+await setSlider("pitch-offset", 0);
+await setSlider("pitch-drift", 3);
+await page.waitForTimeout(700);
+const driftMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(6000);
+const driftRates = (
+  await page.evaluate((from) => window.__starts.slice(from), driftMark)
+)
+  .filter((entry) => entry.args.length === 3 && !entry.loop)
+  .map((entry) => entry.rate);
+const driftSteps = driftRates
+  .slice(1)
+  .map((rate, i) => Math.abs(Math.log2(rate / driftRates[i]) * 12));
+if (
+  driftRates.length >= 6 &&
+  driftRates.every(
+    (rate) => rate >= 2 ** (-3 / 12) - 1e-3 && rate <= 2 ** (3 / 12) + 1e-3,
+  ) &&
+  Math.max(...driftSteps) < 1 &&
+  Math.max(...driftSteps) > 1e-4
+) {
+  ok(
+    `pitch drift 3: ${driftRates.length} passes, within +/-3 semitones, moving by at most ${Math.max(...driftSteps).toFixed(2)} semitones per pass`,
+  );
+} else {
+  fail(`bad drift rates: ${driftRates.map((r) => r.toFixed(3)).join(" ")}`);
+}
+
+// At window 1 a native loop can't re-pitch, so pitch variation turns it
+// into full-length passes; zeroing both returns it to a native loop.
+await setSlider("sample-window", 1);
+await setSlider("pitch-offset", 4);
+await setSlider("pitch-drift", 0);
+await page.waitForTimeout(1000);
+const pitchFullMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(4500);
+const pitchFull = (
+  await page.evaluate((from) => window.__starts.slice(from), pitchFullMark)
+).filter((entry) => entry.args.length === 3 && !entry.loop);
+if (
+  pitchFull.length >= 3 &&
+  pitchFull.every((pass) => near(pass.args[1], 0) && near(pass.args[2], 1))
+) {
+  ok(`window 1 with pitch offset plays ${pitchFull.length} full-length passes`);
+} else {
+  fail(
+    `window 1 with pitch should chain full passes: ${JSON.stringify(pitchFull)}`,
+  );
+}
+await setSlider("pitch-offset", 0);
+await page.waitForTimeout(1000);
+const pitchLoopMark = await page.evaluate(() => window.__starts.length);
+await page.waitForTimeout(2500);
+const pitchLoop = await page.evaluate(
+  (from) => ({
+    newStarts: window.__starts.length - from,
+    lastIsLoop: window.__starts.at(-1).loop,
+  }),
+  pitchLoopMark,
+);
+if (pitchLoop.newStarts === 0 && pitchLoop.lastIsLoop) {
+  ok("window 1 with pitch variation off is a native loop again");
+} else {
+  fail(`should be a native loop again: ${JSON.stringify(pitchLoop)}`);
+}
+
 rmSync(toneDir, { recursive: true, force: true });
 
 // --- Per-file loudness normalization. Pure math first, exact values.
@@ -1234,6 +1384,8 @@ async function loadSoloTone(amplitude) {
   // scene above, same trick and the same fixed count).
   await setSlider("sample-window", 1);
   await setSlider("rest-probability", 0);
+  await setSlider("pitch-offset", 0);
+  await setSlider("pitch-drift", 0);
   await page.setInputFiles("#folder-input", dir);
   await waitForStatus(/^1 of 1 files placed/);
   const gainIndex = (await page.evaluate(() => window.__gains.length)) - 15;

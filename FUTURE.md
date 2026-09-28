@@ -17,8 +17,9 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
   with rests on, passes always start at the sample's beginning, where the
   plain loop starts at a random offset; objects of identical length could
   therefore begin in step until their random rests pull them apart.
-- **Per-pass pitch/rate variation** (a few semitones either way) and a
-  probability that a pass plays reversed.
+- ~~**Per-pass pitch/rate variation** (a few semitones either way)~~ Done:
+  the Pitch offset slider. Still open: a probability that a pass plays
+  reversed.
 - ~~**Other start modes.** Instead of a uniformly random start, slowly scan the
   start point through the sample, or hold it fixed.~~ Done: the `wander` start
   mode (wander speed 0 holds the start still).
@@ -30,9 +31,12 @@ items are done. See [SPEC.md](SPEC.md) for what exists and why.
   passes, so a sample with long passes evolves more slowly in real time than
   one with short passes. Per-object scatter, or a seconds-based speed, would
   even that out.
-- **Slow playback-rate drift**, as in radio-tuner (`MAX_DRIFT_RATE_OFFSET`,
-  about ±1.5%), paced with bruit-kit's `driftMath`, so long passes of similar
-  length don't settle into a repeating pattern. Costs a slight detune.
+- ~~**Slow playback-rate drift**, as in radio-tuner~~ Done as the Pitch drift
+  slider, but for variety rather than phasing: it wanders across passes (a
+  `WanderState`, as the start mode does) with a user-set depth in semitones.
+  Not continuous within a pass, and its speed is fixed and counted in passes,
+  not seconds. A continuous within-pass drift, paced with bruit-kit's
+  `driftMath`, is still open.
 - **One-shot mode at random intervals** per object ("a creak every 20-60 s")
   rather than continuous playback.
 - **Granular texture** for some objects via bruit-kit's `GranularSynth`

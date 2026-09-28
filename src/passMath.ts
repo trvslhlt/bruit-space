@@ -80,3 +80,22 @@ export function advanceWander(
   const arrived = Math.abs(state.target - position) < WANDER_ARRIVAL;
   return { position, target: arrived ? random : state.target };
 }
+
+/** Playback-rate ratio for a pitch shift in semitones (12 = an octave up,
+ * rate 2). */
+export function semitonesToRate(semitones: number): number {
+  return 2 ** (semitones / 12);
+}
+
+/** The pitch shift, in semitones, for one pass: a fresh random offset in
+ * +/-`offsetMax` (`random` is the 0..1 draw, injectable for testing) plus
+ * the slow drift, whose 0..1 `driftPosition` (a WanderState's position)
+ * maps onto +/-`driftDepth`. */
+export function planPitch(
+  offsetMax: number,
+  driftDepth: number,
+  driftPosition: number,
+  random: number = Math.random(),
+): number {
+  return (random * 2 - 1) * offsetMax + (driftPosition * 2 - 1) * driftDepth;
+}
