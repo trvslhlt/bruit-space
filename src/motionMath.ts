@@ -10,7 +10,7 @@ export interface MotionConfig {
   maxSpeed: number;
 }
 
-export const DEFAULT_MOTION_MODE: MotionMode = "none";
+export const DEFAULT_MOTION_MODE: MotionMode = "linear";
 export const DEFAULT_MOTION_BOUNDARY: MotionBoundary = "bounce";
 export const DEFAULT_MIN_SPEED = 0.3; // m/s -- gentle drift, tuned by ear
 export const DEFAULT_MAX_SPEED = 1; // m/s

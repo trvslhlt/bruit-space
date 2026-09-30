@@ -1,9 +1,9 @@
-import { distanceGain } from "bruit-kit/audio";
 import {
   type RoomState,
   type SoundObject,
   clamp,
   clampToRoom,
+  distanceCurveGain,
   distanceToListener,
   objectsInRect,
 } from "./room";
@@ -424,7 +424,11 @@ export class RoomView {
       const radius = this.objectRadiusPx(object);
       const audibility = object.muted
         ? 0
-        : distanceGain(distanceToListener(room, object), room.hearingRange);
+        : distanceCurveGain(
+            room.distanceCurve,
+            distanceToListener(room, object),
+            room.hearingRange,
+          );
       ctx.beginPath();
       ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
       if (object.closed) {

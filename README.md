@@ -62,7 +62,14 @@ directory of `.aif`/`.aiff`, `.wav` or `.mp3` files.
   resumes it from wherever you drop it.
 - **Hearing range** (Listener panel, default 8) is the distance at which
   every object falls to silence (dashed ring on the map). One curve for all
-  objects — a louder object is simply still audible from farther away.
+  objects — a louder object is simply still audible from farther away. That
+  curve's own shape is a draggable graph right below it, **Distance
+  attenuation curve**: left edge is on top of the object, right edge is the
+  hearing range, height is loudness. Drag a point to reshape it,
+  double-click empty space to add one, double-click a point to remove it
+  (the two ends are fixed in place, value only). Defaults to roughly the
+  old fixed falloff (steep near the object, gentle further out) but is
+  fully open to retuning by ear.
 - **Degradation:** besides reverb, every object is randomly assigned one of
   three "falling apart out there" processing chains — lo-fi digital crunch,
   metallic interference, or a broken-speaker-style breakup — that fades in

@@ -1,5 +1,4 @@
-import { distanceGain } from "bruit-kit/audio";
-import { bindSlider, rangeControl } from "bruit-kit/ui";
+import { bindSlider, createAutomationEditor, rangeControl } from "bruit-kit/ui";
 import { unlockAudioContext } from "./audioContext";
 import { createKeyboardControls } from "./keyboard";
 import {
@@ -22,12 +21,14 @@ import {
 } from "./motionMath";
 import { openObjectContextMenu } from "./objectContextMenu";
 import {
+  DEFAULT_DISTANCE_CURVE,
   DEFAULT_LISTENER_SPEED,
   DEFAULT_LISTENER_TURN_RATE,
   type RoomState,
   type SoundObject,
   clamp,
   clampToRoom,
+  distanceCurveGain,
   distanceToListener,
   randomObjectPosition,
 } from "./room";
@@ -66,6 +67,7 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     width: DEFAULT_ROOM_SIZE,
     height: DEFAULT_ROOM_SIZE,
     hearingRange: 8,
+    distanceCurve: DEFAULT_DISTANCE_CURVE.map((point) => ({ ...point })),
     // Starts at the middle of the bottom edge facing up, like just having
     // climbed in through the attic hatch.
     listener: {
@@ -113,37 +115,52 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
   });
   // Keyboard-only: dragging the listener is a direct 1:1 pointer move, with
   // no notion of speed to adjust.
-  query("#listener-controls").innerHTML =
-    rangeControl(
-      "hearing-range",
-      "Hearing range (m)",
-      2,
-      40,
-      1,
-      room.hearingRange,
-    ) +
-    rangeControl(
-      "walk-speed",
-      "Walk speed (m/s)",
-      0.2,
-      8,
-      0.1,
-      DEFAULT_LISTENER_SPEED,
-    ) +
-    rangeControl(
-      "turn-speed",
-      "Turn speed (deg/s)",
-      10,
-      360,
-      5,
-      (DEFAULT_LISTENER_TURN_RATE * 180) / Math.PI,
-    );
+  query("#listener-controls").innerHTML = `${rangeControl(
+    "hearing-range",
+    "Hearing range (m)",
+    2,
+    40,
+    1,
+    room.hearingRange,
+  )}${rangeControl(
+    "walk-speed",
+    "Walk speed (m/s)",
+    0.2,
+    8,
+    0.1,
+    DEFAULT_LISTENER_SPEED,
+  )}${rangeControl(
+    "turn-speed",
+    "Turn speed (deg/s)",
+    10,
+    360,
+    5,
+    (DEFAULT_LISTENER_TURN_RATE * 180) / Math.PI,
+  )}<label>
+      <span class="control-name">Distance attenuation curve</span>
+      <div id="distance-curve-editor"></div>
+    </label>`;
   let walkSpeed = DEFAULT_LISTENER_SPEED;
   let turnRate = DEFAULT_LISTENER_TURN_RATE;
   bindSlider("hearing-range", (value) => {
     room.hearingRange = value;
     dirty = true;
   });
+  // Left edge is the listener's own position (0 m), right edge is
+  // hearingRange -- so the curve's shape, not hearingRange itself, decides
+  // how sharply objects fall off with distance. See distanceCurveGain.
+  createAutomationEditor(
+    query<HTMLDivElement>("#distance-curve-editor"),
+    room.distanceCurve,
+    {
+      width: 300,
+      height: 120,
+      onChange: (points) => {
+        room.distanceCurve = points;
+        dirty = true;
+      },
+    },
+  );
   bindSlider(
     "walk-speed",
     (value) => {
@@ -792,7 +809,9 @@ unlockAudioContext(query("#unlock")).then(async (audioContext) => {
     }
     const distance = distanceToListener(room, selected);
     const heard = Math.round(
-      distanceGain(distance, room.hearingRange) * selected.gain * 100,
+      distanceCurveGain(room.distanceCurve, distance, room.hearingRange) *
+        selected.gain *
+        100,
     );
     const state = selected.closed ? "closed" : "open";
     selectedReadout.textContent = `${selected.name} · ${state} · ${distance.toFixed(1)} m away · heard at ${heard}%`;

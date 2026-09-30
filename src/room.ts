@@ -1,3 +1,5 @@
+import { type AutomationPoint, sampleCurveAt } from "bruit-kit/audio";
+
 /** Room coordinates are metres, x rightward and y downward (screen
  * convention) with (0, 0) at the top-left corner. `heading` is radians
  * clockwise from "up" on the map, so 0 faces the top wall. */
@@ -42,10 +44,29 @@ export interface RoomState {
   height: number;
   /** Distance at which every object falls to silence. */
   hearingRange: number;
+  /** Shared attenuation curve, position 0..1 of hearingRange -> gain 0..1 --
+   * see distanceCurveGain. Edited live via the Listener panel's curve
+   * editor (bruit-kit's automationEditor), so it lives on RoomState rather
+   * than as engine-private state the way e.g. reverb's near/far wet is:
+   * roomView.ts's canvas and main.ts's readout both need it too, to show
+   * the same attenuation they're about to hear. */
+  distanceCurve: AutomationPoint[];
   listener: Listener;
   objects: SoundObject[];
   selectedIds: Set<number>;
 }
+
+/** A rough breakpoint approximation of the original fixed curve this
+ * replaced -- distanceGain's default `(1 - t) ** 2` rolloff, sampled at a
+ * few points -- so the default sound is close to what shipped before this
+ * became user-editable, not a fresh guess. */
+export const DEFAULT_DISTANCE_CURVE: AutomationPoint[] = [
+  { position: 0, value: 1 },
+  { position: 0.25, value: 0.5625 },
+  { position: 0.5, value: 0.25 },
+  { position: 0.75, value: 0.0625 },
+  { position: 1, value: 0 },
+];
 
 /** Every object whose position falls within the room-space rectangle
  * spanned by the two given corners (order doesn't matter) -- the marquee
@@ -90,6 +111,22 @@ export function distanceToListener(
   object: SoundObject,
 ): number {
   return Math.hypot(object.x - room.listener.x, object.y - room.listener.y);
+}
+
+/** An object's loudness multiplier from distance alone, 0 (silent, at or
+ * beyond hearingRange) to `curve`'s own near-anchor value (normally 1) at
+ * distance 0 -- everything in between follows `curve`, a user-shaped
+ * breakpoint curve (see DEFAULT_DISTANCE_CURVE), sampled the same way
+ * bruit-kit's automationEditor samples any other curve. `hearingRange <= 0`
+ * collapses distance to the far end of the curve, same as
+ * reverbWetFraction's own zero-range handling. */
+export function distanceCurveGain(
+  curve: AutomationPoint[],
+  distance: number,
+  hearingRange: number,
+): number {
+  const t = hearingRange > 0 ? distance / hearingRange : 1;
+  return sampleCurveAt(curve, t);
 }
 
 /** How much of an object's sound is reverb rather than direct signal, from

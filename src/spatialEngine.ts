@@ -4,7 +4,6 @@ import {
   ReverbEffect,
   type ReverbEffectParams,
   buildEffectsChain,
-  distanceGain,
   preloadPcmRecorderWorklet,
   preloadSampleRateReducerWorklet,
 } from "bruit-kit/audio";
@@ -13,16 +12,15 @@ import { DEGRADE_CHAIN_SPECS, pickDegradeType } from "./degradeMath";
 import { normalizationGainForBuffer } from "./loudness";
 import type { StartMode } from "./passMath";
 import { type PassConfig, PassPlayer } from "./passPlayer";
-import { type RoomState, reverbWetFraction } from "./room";
+import { type RoomState, distanceCurveGain, reverbWetFraction } from "./room";
 
-// One distance curve (silent at the hearing range) sets an object's total
-// level. How much of that total is reverb rather than direct sound is a
-// separate, user-set mix -- a wet fraction that shifts from "near" (on top
-// of the object) to "far" (at the edge of hearing range). That shifting
-// direct-to-reverberant ratio is the main cue for distance; no room
-// geometry needed. Direct and reverb fade out together, so nothing pops at
-// the range boundary.
-const ROLLOFF_EXPONENT = 2;
+// One shared distance curve (room.distanceCurve, silent at the hearing
+// range -- see distanceCurveGain) sets an object's total level. How much of
+// that total is reverb rather than direct sound is a separate, user-set mix
+// -- a wet fraction that shifts from "near" (on top of the object) to "far"
+// (at the edge of hearing range). That shifting direct-to-reverberant ratio
+// is the main cue for distance; no room geometry needed. Direct and reverb
+// fade out together, so nothing pops at the range boundary.
 
 // Applied to every position/gain change rather than assigning .value
 // directly, which would step and click as the listener or a dragged object
@@ -34,20 +32,15 @@ const NO_WRAPPED_IDS: ReadonlySet<number> = new Set();
 export const DEFAULT_MASTER_LEVEL = 0.9;
 export const DEFAULT_WET_NEAR = 0.1;
 export const DEFAULT_WET_FAR = 1;
-// Deliberately more present than reverb's own near default: reverb is
-// still clearly audible even barely engaged (a short, subtle tail), but a
-// degrade chain barely engaged is nearly indistinguishable from dry --
-// these need their own curve, not reverb's, to actually be heard without
-// cranking a shared slider so high it also blows reverb's own balance out.
-export const DEFAULT_DEGRADE_WET_NEAR = 0.3;
+export const DEFAULT_DEGRADE_WET_NEAR = 0;
 export const DEFAULT_DEGRADE_WET_FAR = 1;
-export const DEFAULT_SAMPLE_WINDOW = 0.3;
+export const DEFAULT_SAMPLE_WINDOW = 1.0;
 export const DEFAULT_START_MODE: StartMode = "wander";
 export const DEFAULT_WANDER_SPEED = 0.5;
 export const DEFAULT_REST_PROBABILITY = 0.1;
-export const DEFAULT_REST_MAX_MS = 650;
-export const DEFAULT_PITCH_OFFSET = 1;
-export const DEFAULT_PITCH_DRIFT = 0.5;
+export const DEFAULT_REST_MAX_MS = 2000;
+export const DEFAULT_PITCH_OFFSET = 0;
+export const DEFAULT_PITCH_DRIFT = 0;
 
 const SCHEDULE_INTERVAL_MS = 250;
 // A slider drag fires many input events; each window or start-mode change
@@ -279,9 +272,10 @@ export class SpatialEngine {
 
     // The panner does direction only (HRTF: left/right, and the front/back
     // spectral cues). Its own distance attenuation is neutralised
-    // (rolloffFactor 0) because distanceGain() -- which, unlike the
-    // built-in models, reaches true silence -- drives level instead, and
-    // the same function has to feed the reverb send too.
+    // (rolloffFactor 0) because distanceCurveGain() -- which, unlike the
+    // built-in models, reaches true silence and follows a user-editable
+    // curve -- drives level instead, and the same function has to feed the
+    // reverb send too.
     const panner = new PannerNode(this.audioContext, {
       panningModel: "HRTF",
       distanceModel: "linear",
@@ -371,7 +365,7 @@ export class SpatialEngine {
       const total =
         level *
         voice.normalizationGain *
-        distanceGain(distance, room.hearingRange, ROLLOFF_EXPONENT);
+        distanceCurveGain(room.distanceCurve, distance, room.hearingRange);
       const reverbWet = reverbWetFraction(
         distance,
         room.hearingRange,

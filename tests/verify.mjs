@@ -181,6 +181,26 @@ async function setSlider(id, value) {
 // reshuffling every object to a new random position out from under a test
 // that already computed coordinates from the first placement. Setting
 // .value directly (like setSlider above) never moves real focus at all.
+// Distance attenuation now goes through room.ts's distanceCurveGain (a
+// user-editable breakpoint curve, not a fixed formula -- see room.ts) --
+// tests that need "the gain distance alone contributes" call the real
+// function with the real curve points rather than re-deriving a formula,
+// so they stay correct however the curve's been edited.
+// `curve` defaults to the shipped DEFAULT_DISTANCE_CURVE (the Node side of
+// this script can't import a .ts module itself, so that default is looked
+// up inside the page); pass a curve explicitly to check against one read
+// back from the live editor instead.
+async function distanceCurveGainAt(distance, hearingRange, curve = null) {
+  return page.evaluate(
+    async ([d, range, points]) => {
+      const { DEFAULT_DISTANCE_CURVE, distanceCurveGain } = await import(
+        "/src/room.ts"
+      );
+      return distanceCurveGain(points ?? DEFAULT_DISTANCE_CURVE, d, range);
+    },
+    [distance, hearingRange, curve],
+  );
+}
 async function setMaxObjects(value) {
   await page.evaluate((v) => {
     const el = document.querySelector("#max-objects");
@@ -234,7 +254,7 @@ const expectedDefaults = {
   "#room-width": "20",
   "#room-height": "20",
   "#layout-mode": "random",
-  "#motion-mode": "none",
+  "#motion-mode": "linear",
   "#motion-boundary": "bounce",
   "#motion-min-speed": "0.3",
   "#motion-max-speed": "1",
@@ -246,17 +266,17 @@ const expectedDefaults = {
   "#reverb-damping": "6000",
   "#reverb-wet-near": "0.1",
   "#reverb-wet-far": "1",
-  "#degrade-wet-near": "0.3",
+  "#degrade-wet-near": "0",
   "#degrade-wet-far": "1",
   "#closed-cutoff": "300",
   "#closed-transition": "1900",
-  "#sample-window": "0.3",
+  "#sample-window": "1",
   "#start-mode": "wander",
   "#wander-speed": "0.5",
   "#rest-probability": "0.1",
-  "#rest-duration": "650",
-  "#pitch-offset": "1",
-  "#pitch-drift": "0.5",
+  "#rest-duration": "2000",
+  "#pitch-offset": "0",
+  "#pitch-drift": "0",
   "#master-level": "0.9",
 };
 const wrongDefaults = [];
@@ -272,6 +292,13 @@ else fail(`unexpected defaults: ${wrongDefaults.join("; ")}`);
 if (!(await page.isDisabled("#wander-speed")))
   ok("wander speed is enabled in the default wander mode");
 else fail("wander speed should be enabled by default");
+
+// Default motion is now "linear" (checked above), but almost everything
+// below assumes objects stay put unless a scene is deliberately testing
+// motion -- those scenes already set their own #motion-mode. Pin it back
+// to "none" here so the rest of the suite isn't flaky against objects
+// drifting mid-check.
+await page.selectOption("#motion-mode", "none");
 
 await page.setInputFiles("#folder-input", sampleDir);
 await waitForStatus(/^15 of 21 files placed/);
@@ -679,8 +706,9 @@ if (Math.abs(q - -3.0103) < 0.01) {
 // --- The reverb share of an object's sound follows the near/far settings,
 // interpolated linearly with distance. Read straight off the voice's two
 // gains: direct = total * (1 - wet), send = total * wet, with total on the
-// shared (1 - d/range)^2 curve times bright.wav's own normalization gain
-// (every object's total now includes per-file loudness correction -- see
+// shared distanceCurveGain (the default curve, untouched by this scene)
+// times bright.wav's own normalization gain (every object's total now
+// includes per-file loudness correction -- see
 // the loudness normalization tests below -- so this scene's expected total
 // has to account for it too, not just distance).
 const brightToneNormGain = Math.min(
@@ -732,7 +760,8 @@ for (const [[reverbNear, reverbFar], [degradeNear, degradeFar]] of [
   const t = distance / 40;
   const expectedReverbWet = reverbNear + (reverbFar - reverbNear) * t;
   const wet = send / (direct + send);
-  const totalRatio = (direct + send) / ((1 - t) ** 2 * brightToneNormGain);
+  const curveGain = await distanceCurveGainAt(distance, 40);
+  const totalRatio = (direct + send) / (curveGain * brightToneNormGain);
   if (
     Math.abs(wet - expectedReverbWet) < 0.03 &&
     Math.abs(totalRatio - 1) < 0.03
@@ -766,6 +795,128 @@ for (const [[reverbNear, reverbFar], [degradeNear, degradeFar]] of [
       `degrade chain mix off at ${distance} m, near ${degradeNear} / far ${degradeFar}: wet ${degradeWetFraction.toFixed(3)} (expected ${expectedDegradeWet.toFixed(3)}), dry+wet ${degradeSum.toFixed(3)} (expected 1)`,
     );
   }
+}
+
+const near = (a, b) => Math.abs(a - b) < 1e-3;
+
+// --- Distance attenuation curve. Pure math first: room.ts's
+// distanceCurveGain is bruit-kit's generic sampleCurveAt, so this mostly
+// checks the shipped default curve and the edge cases distanceGain (what
+// this replaced) used to handle itself -- reaching true silence at and
+// beyond hearingRange, clamping distance below 0.
+const curveMath = await page.evaluate(async () => {
+  const { DEFAULT_DISTANCE_CURVE, distanceCurveGain } = await import(
+    "/src/room.ts"
+  );
+  return {
+    atZero: distanceCurveGain(DEFAULT_DISTANCE_CURVE, 0, 40),
+    atRange: distanceCurveGain(DEFAULT_DISTANCE_CURVE, 40, 40),
+    beyondRange: distanceCurveGain(DEFAULT_DISTANCE_CURVE, 60, 40),
+    beforeZero: distanceCurveGain(DEFAULT_DISTANCE_CURVE, -5, 40),
+    atQuarter: distanceCurveGain(DEFAULT_DISTANCE_CURVE, 10, 40),
+    zeroRange: distanceCurveGain(DEFAULT_DISTANCE_CURVE, 5, 0),
+  };
+});
+if (
+  near(curveMath.atZero, 1) &&
+  near(curveMath.atRange, 0) &&
+  near(curveMath.beyondRange, 0) &&
+  near(curveMath.beforeZero, 1) &&
+  near(curveMath.atQuarter, 0.5625) &&
+  near(curveMath.zeroRange, 0)
+) {
+  ok(
+    "distance curve: default reaches 1 at 0 m and 0 at/beyond hearing range, clamps outside it",
+  );
+} else {
+  fail(`bad distance curve math: ${JSON.stringify(curveMath)}`);
+}
+
+// Then the real editor, end to end: edit the curve in the actual DOM widget
+// (Listener panel) and confirm the audio graph's real gain follows it, not
+// just the pure function above. Reuses the bright.wav tone/voiceMix from
+// the reverb-mix scene just above, with reverb and degrade both silenced
+// so direct+send is the distance curve's whole contribution.
+await setSlider("reverb-wet-near", 0);
+await setSlider("reverb-wet-far", 0);
+await setSlider("degrade-wet-near", 0);
+await setSlider("degrade-wet-far", 0);
+const curveBefore = await voiceMix();
+const editorSvg = page.locator("#distance-curve-editor .automation-svg");
+const viewBox = (await editorSvg.getAttribute("viewBox"))
+  .split(" ")
+  .map(Number);
+const [, , vbWidth, vbHeight] = viewBox;
+// By this point the Objects list has grown long enough that .side's own
+// overflow-y: auto has likely scrolled the Listener panel (well above the
+// object list in the DOM) out of the viewport -- its real screen position
+// (and so a raw boundingBox()) depends on where the sidebar happens to be
+// scrolled to, unlike every other control this suite drives via setSlider,
+// which never needs real pointer coordinates.
+await editorSvg.scrollIntoViewIfNeeded();
+const editorBox = await editorSvg.boundingBox();
+// Double-click exactly at this object's own position on the curve (its
+// measured distance as a fraction of the 40 m hearing range), with a value
+// deliberately on the opposite side of whatever the curve already gives
+// there -- so the edit is guaranteed to move this object's own gain by a
+// large, unmistakable amount, whichever segment of the default curve its
+// random spawn distance happened to land in.
+const editT = Math.min(1, curveBefore.distance / 40);
+const curveGainBefore = curveBefore.direct / brightToneNormGain;
+const targetValue = curveGainBefore > 0.5 ? 0 : 1;
+// A couple pixels in from the very top/bottom edge, not the true 0/1
+// extreme -- so the click lands on the SVG itself rather than risking a
+// point right on its boundary, at the cost of a value a hair off 0/1
+// (negligible next to the >=0.3 gap this is meant to guarantee).
+const edgeInsetPx = 2;
+await page.mouse.dblclick(
+  editorBox.x + editT * editorBox.width,
+  editorBox.y +
+    edgeInsetPx +
+    (1 - targetValue) * (editorBox.height - 2 * edgeInsetPx),
+);
+await page.waitForTimeout(500);
+const curveAfter = await voiceMix();
+// Read the curve back from the DOM (not from the click's intended target,
+// which pixel rounding could miss slightly) -- the polyline's own points
+// attribute is the actual, current curve, in the same units passed to
+// createAutomationEditor.
+const linePoints = await page
+  .locator("#distance-curve-editor .automation-line")
+  .getAttribute("points");
+const parsedCurve = linePoints
+  .trim()
+  .split(" ")
+  .map((pair) => {
+    const [x, y] = pair.split(",").map(Number);
+    return { position: x / vbWidth, value: 1 - y / vbHeight };
+  });
+const expectedGain = await distanceCurveGainAt(
+  curveAfter.distance,
+  40,
+  parsedCurve,
+);
+const expectedTotal = expectedGain * brightToneNormGain;
+const totalBefore = curveBefore.direct + curveBefore.send;
+const totalAfter = curveAfter.direct + curveAfter.send;
+const editMovedGain =
+  Math.abs(totalAfter - totalBefore) > 0.3 * brightToneNormGain;
+// A relative tolerance alone blows up when the click's target end (0 or 1)
+// lands the expected total near zero -- add an absolute floor scaled off
+// normGain, not off expectedTotal itself, so a near-silent target doesn't
+// need near-perfect precision to pass.
+const totalTolerance = Math.max(
+  0.02 * brightToneNormGain,
+  0.03 * expectedTotal,
+);
+if (Math.abs(totalAfter - expectedTotal) < totalTolerance && editMovedGain) {
+  ok(
+    `editing the distance curve in the DOM changes real audio: ${totalBefore.toFixed(3)} -> ${totalAfter.toFixed(3)} (matches distanceCurveGain on the curve read back from the editor)`,
+  );
+} else {
+  fail(
+    `distance curve edit not reflected in audio: before ${totalBefore.toFixed(3)}, after ${totalAfter.toFixed(3)}, expected ${expectedTotal.toFixed(3)}, parsed curve ${JSON.stringify(parsedCurve)}`,
+  );
 }
 
 // --- Which degrade chain an object gets: pure logic, no audio involved --
@@ -820,7 +971,6 @@ const plans = await page.evaluate(async () => {
     shortSample: planPass(0.03, 0.5, 0.5),
   };
 });
-const near = (a, b) => Math.abs(a - b) < 1e-3;
 if (
   near(plans.lowest.offset, 0) &&
   near(plans.lowest.length, 9) &&
@@ -1411,8 +1561,9 @@ async function loadSoloTone(amplitude) {
   );
   rmSync(dir, { recursive: true, force: true });
   // Isolates the measured normalization gain: directGain = 1 (slider) *
-  // normGain * (1 - distance/range)^2 (ROLLOFF_EXPONENT 2, wet 0).
-  const measuredNormGain = directGain / (1 - distance / 40) ** 2;
+  // normGain * distanceCurveGain(default curve, distance, 40) (wet 0).
+  const measuredNormGain =
+    directGain / (await distanceCurveGainAt(distance, 40));
   const rms = rmsOfSamples(samples);
   // TARGET_RMS / rms, clamped the same way loudness.ts's normalizationGain
   // does -- matters for the quiet tone below, where the raw ratio exceeds
